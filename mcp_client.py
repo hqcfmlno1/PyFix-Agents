@@ -37,7 +37,9 @@ else:
     genai_client = genai.Client(credentials=creds)
     provider = GoogleProvider(client=genai_client)
 
-MODEL_DISPLAY_NAME = "gemma-4-31b-it"
+#MODEL_DISPLAY_NAME = "gemma-4-31b-it"
+MODEL_DISPLAY_NAME = "gemini-2.5-flash"
+
 model = GoogleModel(MODEL_DISPLAY_NAME, provider=provider)
 
 MODEL_NAME = MODEL_DISPLAY_NAME
@@ -91,12 +93,17 @@ class BugReport(BaseModel):
     want_plan: bool = False
 
 
+class SingleFileFix(BaseModel):
+    """Chi tiết sửa đổi cho một file cụ thể."""
+    target_file: str = Field(description="Đường dẫn tương đối của file cần sửa (vd: main.py, utils.py)")
+    new_content: str = Field(description="TOÀN BỘ nội dung mới của file sau khi sửa")
+    changes_summary: str = Field(description="Tóm tắt những thay đổi trong file này")
+
+
 class CodeFix(BaseModel):
-    """Output từ Coder Agent."""
-    target_file: str          # Đường dẫn file cần sửa
-    new_content: str          # Toàn bộ nội dung file SAU khi sửa
-    explanation: str          # Giải thích nguyên nhân lỗi
-    changes_summary: str      # Tóm tắt những gì đã thay đổi
+    """Output từ Coder Agent (Hỗ trợ sửa 1 hoặc nhiều file cùng lúc)."""
+    files: List[SingleFileFix] = Field(default_factory=list, description="Danh sách tất cả các file cần sửa")
+    explanation: str = Field(description="Giải thích nguyên nhân gốc rễ và giải pháp sửa tổng thể")
 
 
 class RePlanHistory(BaseModel):
@@ -180,13 +187,23 @@ _INPUT_ANALYZER_PROMPT = textwrap.dedent("""\
 
 _PLANNER_PROMPT = textwrap.dedent("""\
     Bạn là AI chuyên lập kế hoạch sửa lỗi Python an toàn và hiệu quả.
-    Nhiệm vụ: Phân tích bug report + context dự án → tạo kế hoạch sửa lỗi cụ thể.
+    Bạn có các MCP tools: get_file_context, read_file, search_in_codebase.
+
+    QUY TRÌNH LẬP KẾ HOẠCH:
+    1. KHÁM PHÁ: Dùng get_file_context(file_path, repo_path) để đọc nội dung file chính được báo lỗi.
+    2. TRUY VẾT: Xem các import/dependencies trong file đó. Nếu lỗi có thể liên quan đến file khác,
+       dùng read_file hoặc get_file_context để đọc thêm các file liên quan.
+    3. TÌM KIẾM: Nếu cần tìm định nghĩa hàm/class cụ thể, dùng search_in_codebase(keyword, repo_path).
+    4. PHÂN TÍCH: Sau khi đã đọc đủ context, phân tích nguyên nhân gốc rễ.
+    5. LẬP PLAN: Tạo kế hoạch sửa lỗi chi tiết, mỗi bước nêu rõ file cần sửa và hành động cụ thể.
 
     NGUYÊN TẮC:
     1. AN TOÀN: Tối thiểu hóa thay đổi. Chỉ sửa đúng chỗ gây ra lỗi.
-    2. CỤ THỂ: Mỗi bước nêu rõ file cần sửa và hành động cụ thể.
+    2. CỤ THỂ: Mỗi bước nêu rõ file cần sửa (target_file) và hành động chính xác.
     3. THỰC TẾ: Không đề xuất refactor lớn khi không cần thiết.
     4. KIỂM TRA: Bước cuối luôn là kiểm tra kết quả sau sửa.
+    5. BẮT BUỘC ĐỌC FILE: Bạn PHẢI dùng MCP tools để đọc mã nguồn thực tế TRƯỚC KHI lập plan.
+       Không được lập plan dựa trên phỏng đoán.
 
     risk_level:
     - low:    Sửa 1 dòng hoặc logic đơn giản
@@ -197,23 +214,26 @@ _PLANNER_PROMPT = textwrap.dedent("""\
 """)
 
 _CODER_PROMPT = textwrap.dedent("""\
-    Bạn là AI chuyên sửa lỗi Python với độ chính xác cao.
-    Bạn có MCP tools: read_file, get_file_context, search_in_codebase, run_python_syntax_check.
+    Bạn là AI chuyên thực thi sửa lỗi Python với độ chính xác tuyệt đối.
+    Nhiệm vụ hàng đầu của bạn là THỰC THI NGHIÊM NGẶT THEO ĐÚNG TỪNG BƯỚC TRONG KẾ HOẠCH (PLAN).
 
-    QUY TRÌNH:
-    1. Dùng get_file_context(file_path, repo_path) để đọc file cần sửa + imports
-    2. Phân tích nguyên nhân gốc rễ của lỗi
-    3. Nếu cần hiểu thêm: dùng search_in_codebase hoặc read_file
-    4. Viết bản fix chính xác theo plan
-    5. Trả về TOÀN BỘ nội dung file đã sửa
+    QUY TẮC TUÂN THỦ PLAN BẮT BUỘC:
+    1. Kế hoạch (Plan) được duyệt là MỆNH LỆNH BẮT BUỘC, KHÔNG PHẢI GỢI Ý.
+    2. Bạn BẮT BUỘC phải thực hiện đầy đủ và chính xác tất cả các bước được chỉ định trong Plan.
+    3. Với mỗi bước chỉ định sửa file nào (target_file), bạn phải thực hiện đúng hành động sửa trên file đó.
+    4. KHÔNG TỰ Ý bỏ qua bước nào, KHÔNG tự ý đổi sang cách sửa khác nằm ngoài Plan ngoại trừ việc sửa cú pháp nhỏ phát sinh.
 
-    QUY TẮC BẮT BUỘC:
+    QUY TRÌNH THỰC THI:
+    1. Đọc kỹ từng bước trong KẾ HOẠCH BẮT BUỘC.
+    2. Dùng các MCP tools (get_file_context, read_file, search_in_codebase) để đọc kiểm tra lại nội dung đầy đủ các file cần sửa theo đúng kế hoạch.
+    3. Thực hiện sửa đổi trên tất cả các file được yêu cầu trong Plan (trả về trong danh sách 'files').
+    4. Với MỖI file trong danh sách 'files', trả về TOÀN BỘ (100%) nội dung file hoàn chỉnh sau khi sửa.
+
+    QUY TẮC MÃ NGUỒN:
     ✗ Không dùng "..." hay "# rest of code unchanged"
     ✗ Không xóa code đang hoạt động tốt
-    ✗ Không thêm code không liên quan đến fix
-    ✓ Giữ nguyên indentation và naming style của code gốc
-    ✓ Trả về 100% nội dung file sau khi sửa
-    ✓ Giải thích rõ nguyên nhân lỗi và cách fix
+    ✓ Với mỗi file sửa trong 'files', phải trả về 100% nội dung hoàn chỉnh của file đó sau khi sửa
+    ✓ Trong trường 'explanation', giải thích rõ cách bạn đã tuân thủ thực hiện từng bước của Plan
 """)
 
 
@@ -226,14 +246,16 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
     retries=2,
 )
 
+mcp_toolset = MCPToolset(MCP_SERVER_URL)
+
+
 planner_agent: Agent[None, PlanOutput] = Agent(
     model,
     output_type=PlanOutput,
     system_prompt=_PLANNER_PROMPT,
+    toolsets=[mcp_toolset],
     retries=2,
 )
-
-mcp_toolset = MCPToolset(MCP_SERVER_URL)
 
 coder_agent: Agent[None, CodeFix] = Agent(
     model,
@@ -601,19 +623,9 @@ class PlanningNode(BaseNode[BugFixState]):
         if ctx.state.user_plan_feedback:
             _print_step("🔄", "Planner Agent", f"Đang cập nhật plan lần {ctx.state.replan_count + 1}...")
         else:
-            _print_step("🧠", "Planner Agent", f"Đang tạo kế hoạch sửa lỗi với {MODEL_NAME}...")
+            _print_step("🧠", "Planner Agent", f"Đang tạo kế hoạch sửa lỗi với {MODEL_NAME}... (Planner sẽ tự đọc file qua MCP Tools)")
 
-        # ── Load file context để planner có đủ thông tin ─────────────────────
-        file_snippet = ""
-        if ctx.state.target_file:
-            full_path = _resolve_target_path(ctx.state.target_file, ctx.state.repo_path)
-            if os.path.exists(full_path):
-                content = _load_file_content(full_path)
-                ctx.state.files_context[full_path] = content
-                # Giới hạn 3000 ký tự để tránh quá dài
-                file_snippet = content[:3000] + ("\n... (truncated)" if len(content) > 3000 else "")
-
-        # ── Xây dựng prompt ───────────────────────────────────────────────────
+        # ── Xây dựng prompt — Planner sẽ tự dùng MCP tools để đọc file ────────
         replan_section = ""
         if ctx.state.user_plan_feedback and ctx.state.current_plan:
             old_plan_str = "\n".join(
@@ -632,19 +644,20 @@ Hãy tạo plan mới KHÁC với plan cũ, tính đến feedback của user.
 
         prompt = f"""BUG REPORT:
 - Loại lỗi    : {ctx.state.bug_type.value if ctx.state.bug_type else 'chưa xác định'}
-- File cần sửa: {ctx.state.target_file or 'chưa xác định'}
+- File chính  : {ctx.state.target_file or 'chưa xác định'}
+- Repo path   : {ctx.state.repo_path}
 - Lỗi thực tế : {ctx.state.actual_output or 'N/A'}
 - Kỳ vọng     : {ctx.state.expected_output or 'N/A (không crash là được)'}
 
 CẤU TRÚC DỰ ÁN:
 {ctx.state.project_tree}
 
-NỘI DUNG FILE CẦN SỬA:
-```python
-{file_snippet or '(Chưa load được nội dung file)'}
-```
+HƯỚNG DẪN BẮT BUỘC:
+1. Dùng get_file_context("{ctx.state.target_file or ''}", "{ctx.state.repo_path}") để đọc file chính bị lỗi.
+2. Xem các import trong file đó. Nếu lỗi có thể liên quan file khác, dùng read_file hoặc get_file_context để đọc thêm.
+3. Sau khi đã đọc đủ mã nguồn, phân tích nguyên nhân gốc rễ và tạo kế hoạch sửa lỗi chi tiết.
 {replan_section}
-Hãy tạo kế hoạch sửa lỗi chi tiết và thực tế.
+Hãy BẮT ĐẦU bằng việc đọc file qua MCP tools, rồi tạo kế hoạch sửa lỗi (nêu rõ bước nào sửa file nào).
 """
 
         result = await planner_agent.run(prompt)
@@ -679,7 +692,7 @@ class PlanInterceptorNode(BaseNode[BugFixState]):
     - False → Tự động duyệt, đi thẳng đến Execution
     - True  → Hiển thị plan, chờ /ok hoặc /replan <feedback>
     """
-
+    # bắt buộc phải cung cáp feed back nếu muốn replan
     async def run(self, ctx: GraphRunContext[BugFixState]) -> Union[ExecutionNode, PlanningNode]:
         # ── Không cần xem plan → auto approve ────────────────────────────────
         if not ctx.state.want_plan:
@@ -722,12 +735,12 @@ class PlanInterceptorNode(BaseNode[BugFixState]):
 @dataclass
 class ExecutionNode(BaseNode[BugFixState]):
     """
-    [Agent] Coder Agent đọc file qua MCP tools, tạo bản fix, rồi
-    xin human approval trước khi ghi file (deterministic approval).
+    [Agent] Thực thi tuần tự từng bước trong Kế hoạch (Plan-step by Plan-step execution).
+    Ép Coder Agent tuân thủ 100% từng bước của Plan bằng vòng lặp điều khiển cấu trúc code Python.
     """
 
     async def run(self, ctx: GraphRunContext[BugFixState]) -> ValidationNode:
-        _print_step("🛠", "Coder Agent", f"Đang phân tích và sửa lỗi với {MODEL_NAME}...")
+        _print_step("🛠", "Coder Agent", f"Đang thực thi tuần tự từng bước Plan với {MODEL_NAME}...")
 
         # ── Chuyển validation errors cũ vào logs ─────────────────────────────
         if ctx.state.validation_errors:
@@ -735,88 +748,162 @@ class ExecutionNode(BaseNode[BugFixState]):
                 ctx.state.execution_logs.append(f"[Lỗi validation lần trước] {err}")
         ctx.state.validation_errors = []
 
-        # ── Xây dựng prompt cho coder agent ───────────────────────────────────
-        steps_str = "\n".join(
-            f"  Bước {s.step_id}: {s.title}\n    → {s.description} (file: {s.target_file})"
-            for s in ctx.state.current_plan
-        )
         prev_errors_str = ""
         if ctx.state.execution_logs:
             last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
             prev_errors_str = f"\nLỖI TỪ LẦN THỬ TRƯỚC:\n{last_errors}\nHãy sửa khác đi, tránh lặp lại lỗi trên."
 
-        prompt = f"""Hãy sửa lỗi Python theo kế hoạch sau.
+        # ── Chuẩn bị plan steps ────────────────────────────────────────────────
+        plan_steps = ctx.state.current_plan
+        if not plan_steps:
+            plan_steps = [PlanStep(step_id=1, title="Sửa lỗi dự án",
+                                  description="Sửa code theo mô tả lỗi",
+                                  target_file=ctx.state.target_file or "main.py")]
 
-THÔNG TIN LỖI:
+        # ── PHASE 1: Backup bản gốc tất cả file liên quan ────────────────────
+        # Lưu nội dung gốc trước khi bất kỳ bước nào ghi đè,
+        # để hiển thị diff chính xác (gốc vs cuối) và rollback nếu user reject.
+        original_backups: dict[str, str] = {}  # {absolute_path: original_content}
+        touched_files: set[str] = set()
+        for step in plan_steps:
+            abs_path = _resolve_target_path(step.target_file, ctx.state.repo_path)
+            if abs_path not in original_backups:
+                original_backups[abs_path] = _load_file_content(abs_path)
+
+        aggregated_explanations: List[str] = []
+
+        # ── PHASE 2: Vòng lặp thực thi tuần tự — GHI TẠM sau mỗi bước ───────
+        # Sau khi Coder Agent trả về fix cho Bước N, hệ thống ghi ngay xuống đĩa.
+        # Khi Bước N+1 chạy, Coder Agent dùng MCP tools đọc file → thấy phiên bản
+        # đã được cập nhật bởi Bước N → đảm bảo tính tuần tự thực sự.
+        for idx, step in enumerate(plan_steps, start=1):
+            _print_step("📌", f"Bước {idx}/{len(plan_steps)}",
+                        f"{step.title} (file: {CYAN}{step.target_file}{RESET})")
+
+            step_prompt = f"""BẠN ĐANG THỰC THI BƯỚC {idx}/{len(plan_steps)} CỦA KẾ HOẠCH.
+
+NHIỆM VỤ BẮT BUỘC CỦA BƯỚC NÀY:
+- Tiêu đề  : {step.title}
+- Chi tiết : {step.description}
+- File sửa : {step.target_file}
+
+THÔNG TIN DỰ ÁN:
 - Repo path  : {ctx.state.repo_path}
 - Loại lỗi  : {ctx.state.bug_type.value if ctx.state.bug_type else 'unknown'}
-- File chính : {ctx.state.target_file or 'chưa xác định'}
 - Lỗi thực tế: {ctx.state.actual_output or 'N/A'}
-- Kỳ vọng    : {ctx.state.expected_output or 'Không có exception'}
-
-KẾ HOẠCH SỬA:
-{steps_str}
+- Kỳ vọng    : {ctx.state.expected_output or 'N/A'}
 {prev_errors_str}
 
 HƯỚNG DẪN:
-1. Dùng get_file_context("{ctx.state.target_file}", "{ctx.state.repo_path}") để đọc file
-2. Phân tích code và nguyên nhân lỗi  
-3. Trả về TOÀN BỘ nội dung file đã sửa (không bỏ sót dòng nào)
+1. Dùng get_file_context("{step.target_file}", "{ctx.state.repo_path}") hoặc read_file để đọc mã nguồn HIỆN TẠI của file.
+2. CHỈ thực hiện sửa đổi theo đúng yêu cầu của Bước {idx} trên file {step.target_file}.
+3. Trả về kết quả trong danh sách 'files' (chứa đúng 1 SingleFileFix cho file {step.target_file}).
+4. Trả về TOÀN BỘ (100%) nội dung hoàn chỉnh của file sau khi sửa.
 """
+            try:
+                result = await coder_agent.run(step_prompt)
+                step_fix: CodeFix = result.output
 
-        # ── Chạy coder agent với MCPToolset (kết nối HTTP đến server đang chạy) ─
-        # MCPToolset xử lý kết nối nội bộ — gọi agent.run() thẳng, không cần
-        # context manager run_mcp_servers().
-        try:
-            result = await coder_agent.run(prompt)
-            code_fix: CodeFix = result.output
-        except Exception as exc:
-            _print_step("❌", "Coder Agent", f"{RED}Lỗi khi chạy agent: {exc}{RESET}")
-            ctx.state.validation_errors = [f"Agent error: {exc}"]
-            ctx.state.retry_count += 1
-            return ValidationNode()
+                if step_fix.explanation:
+                    aggregated_explanations.append(f"Bước {idx} ({step.title}): {step_fix.explanation}")
 
+                # Ghi tạm kết quả bước này xuống đĩa ngay lập tức
+                if step_fix.files:
+                    for ffix in step_fix.files:
+                        abs_path = _resolve_target_path(ffix.target_file, ctx.state.repo_path)
+                        # Backup gốc nếu file này chưa được backup (file ngoài plan)
+                        if abs_path not in original_backups:
+                            original_backups[abs_path] = _load_file_content(abs_path)
+                        # Ghi tạm xuống đĩa để bước tiếp theo đọc được qua MCP
+                        try:
+                            if os.path.dirname(abs_path):
+                                os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+                            with open(abs_path, "w", encoding="utf-8") as fh:
+                                fh.write(ffix.new_content)
+                            touched_files.add(abs_path)
+                            _print_step("💾", f"Bước {idx}",
+                                        f"Đã ghi tạm {ffix.target_file} (bước sau sẽ thấy thay đổi này)")
+                        except Exception as write_exc:
+                            _print_step("❌", f"Bước {idx}",
+                                        f"{RED}Lỗi ghi tạm {ffix.target_file}: {write_exc}{RESET}")
+
+            except Exception as exc:
+                _print_step("❌", "Coder Agent",
+                            f"{RED}Lỗi khi thực thi Bước {idx}: {exc}{RESET}")
+                # Rollback tất cả file đã ghi tạm về bản gốc
+                self._rollback(original_backups, touched_files)
+                ctx.state.validation_errors.append(f"Lỗi thực thi bước {idx}: {exc}")
+                ctx.state.retry_count += 1
+                return ValidationNode()
+
+        # ── PHASE 3: Đọc lại nội dung cuối cùng từ đĩa để đóng gói CodeFix ───
+        final_files: List[SingleFileFix] = []
+        for abs_path in touched_files:
+            final_content = _load_file_content(abs_path)
+            rel_path = os.path.relpath(abs_path, ctx.state.repo_path)
+            final_files.append(SingleFileFix(
+                target_file=rel_path,
+                new_content=final_content,
+                changes_summary=f"Đã sửa theo plan",
+            ))
+
+        code_fix = CodeFix(
+            files=final_files,
+            explanation="\n".join(aggregated_explanations) if aggregated_explanations else "Đã thực thi thành công tất cả các bước trong plan."
+        )
         ctx.state.code_fix = code_fix
 
-        # ── Xác định đường dẫn file thực tế ──────────────────────────────────
-        target_path = _resolve_target_path(code_fix.target_file, ctx.state.repo_path)
-        original_content = _load_file_content(target_path)
+        if not final_files:
+            _print_step("⚠", "Coder Agent", "Không có file nào được sửa → Xuất báo cáo.")
+            return ValidationNode()
 
-        # ── Hiển thị giải thích và diff ───────────────────────────────────────
-        print(f"\n  {BOLD}💡 Nguyên nhân:{RESET} {code_fix.explanation}")
-        print(f"  {BOLD}📝 Thay đổi   :{RESET} {code_fix.changes_summary}")
-        print(f"\n{'─'*60}  DIFF  {'─'*60}\n")
+        # ── PHASE 4: Rollback tạm về bản gốc trước khi hiển thị diff ──────────
+        # Khôi phục bản gốc trên đĩa để diff so sánh chính xác "gốc vs mới"
+        # và để user quyết định có áp dụng hay không.
+        self._rollback(original_backups, touched_files)
 
-        diff_lines = _compute_diff(original_content, code_fix.new_content,
-                                   os.path.basename(target_path))
-        _print_diff(diff_lines)
-        print(f"\n{'─'*128}")
+        # ── Hiển thị tổng hợp diff (bản gốc vs bản sửa cuối cùng) ────────────
+        print(f"\n  {BOLD}💡 Tổng hợp kết quả:{RESET}")
+        print(f"  {BOLD}📝 Các file đã sửa ({len(final_files)} file):{RESET}")
+        for ffix in final_files:
+            print(f"     • {CYAN}{ffix.target_file}{RESET}: {ffix.changes_summary}")
+        print(f"\n  {BOLD}Giải thích:{RESET} {code_fix.explanation}")
 
-        # ── Human approval (deterministic) ─────────────────────────────────────
+        for ffix in final_files:
+            abs_path = _resolve_target_path(ffix.target_file, ctx.state.repo_path)
+            orig = original_backups.get(abs_path, "")
+            print(f"\n{'─'*50} DIFF: {CYAN}{ffix.target_file}{RESET} {'─'*50}\n")
+            diff_lines = _compute_diff(orig, ffix.new_content, os.path.basename(abs_path))
+            _print_diff(diff_lines)
+
+        print(f"\n{'─'*120}")
+
+        # ── Human approval ────────────────────────────────────────────────────
         print(f"\n{BOLD}{YELLOW}⚠  HUMAN APPROVAL — Xem xét thay đổi trước khi áp dụng{RESET}")
-        print(f"   File sẽ được ghi: {CYAN}{target_path}{RESET}\n")
+        print(f"   Số lượng file sẽ ghi: {CYAN}{len(final_files)} file{RESET}\n")
 
         while True:
             choice = input(
-                f"  [{GREEN}y{RESET}] Duyệt & ghi file  "
+                f"  [{GREEN}y{RESET}] Duyệt & ghi tất cả  "
                 f"[{RED}n{RESET}] Bỏ qua / thử lại  "
                 f"[{YELLOW}q{RESET}] Thoát chương trình\n"
                 f"  Lựa chọn: "
             ).strip().lower()
 
             if choice == "y":
-                # Ghi file — đây là hành động cần human approval
-                try:
-                    os.makedirs(os.path.dirname(target_path), exist_ok=True) if os.path.dirname(target_path) else None
-                    with open(target_path, "w", encoding="utf-8") as fh:
-                        fh.write(code_fix.new_content)
-                    print(f"  {GREEN}✅ Đã ghi file: {target_path}{RESET}")
-                    ctx.state.execution_logs.append(
-                        f"Applied fix to {target_path}: {code_fix.changes_summary}"
-                    )
-                except Exception as write_exc:
-                    print(f"  {RED}❌ Lỗi khi ghi file: {write_exc}{RESET}")
-                    ctx.state.validation_errors = [f"Write error: {write_exc}"]
+                for ffix in final_files:
+                    abs_path = _resolve_target_path(ffix.target_file, ctx.state.repo_path)
+                    try:
+                        with open(abs_path, "w", encoding="utf-8") as fh:
+                            fh.write(ffix.new_content)
+                        print(f"  {GREEN}✅ Đã ghi file: {abs_path}{RESET}")
+                        ctx.state.execution_logs.append(
+                            f"Applied fix to {abs_path}: {ffix.changes_summary}"
+                        )
+                    except Exception as write_exc:
+                        print(f"  {RED}❌ Lỗi khi ghi file {abs_path}: {write_exc}{RESET}")
+                        ctx.state.validation_errors.append(
+                            f"Write error ({ffix.target_file}): {write_exc}")
                 break
 
             elif choice == "n":
@@ -833,6 +920,17 @@ HƯỚNG DẪN:
                 print(f"  {RED}✗ Vui lòng nhập y, n, hoặc q{RESET}")
 
         return ValidationNode()
+
+    @staticmethod
+    def _rollback(backups: dict[str, str], touched: set[str]) -> None:
+        """Khôi phục nội dung gốc cho tất cả file đã bị ghi tạm."""
+        for abs_path in touched:
+            if abs_path in backups:
+                try:
+                    with open(abs_path, "w", encoding="utf-8") as fh:
+                        fh.write(backups[abs_path])
+                except Exception:
+                    pass  # Best-effort rollback
 
 
 # ─── 8. ValidationNode ───────────────────────────────────────────────────────
@@ -851,29 +949,28 @@ class ValidationNode(BaseNode[BugFixState]):
     ) -> Union[ExecutionNode, PlanningNode, ReportNode]:
         _print_step("🔍", "Validation", "1/2. Kiểm tra cú pháp file đã sửa...")
 
-        if not ctx.state.code_fix:
-            _print_step("⚠", "Validation", "Không có code fix để kiểm tra → Xuất báo cáo.")
+        if not ctx.state.code_fix or not ctx.state.code_fix.files:
+            _print_step("⚠", "Validation", "Không có file fix để kiểm tra → Xuất báo cáo.")
             return ReportNode()
 
-        target_path = _resolve_target_path(ctx.state.code_fix.target_file, ctx.state.repo_path)
+        # ── 1. Kiểm tra cú pháp (py_compile) trên tất cả các file đã sửa ────────
+        for ffix in ctx.state.code_fix.files:
+            target_path = _resolve_target_path(ffix.target_file, ctx.state.repo_path)
+            if not os.path.exists(target_path):
+                _print_step("⚠", "Validation", f"File không tồn tại: {target_path} → Xuất báo cáo.")
+                return ReportNode()
 
-        if not os.path.exists(target_path):
-            _print_step("⚠", "Validation", f"File không tồn tại: {target_path} → Xuất báo cáo.")
-            return ReportNode()
+            proc = subprocess.run(
+                [sys.executable, "-m", "py_compile", target_path],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                syntax_err = (proc.stderr or proc.stdout).strip()
+                _print_step("❌", "Validation", f"{RED}Lỗi cú pháp tại {ffix.target_file}:{RESET}\n  {syntax_err}")
+                return self._handle_failure(ctx, f"Lỗi cú pháp ({ffix.target_file}): {syntax_err}")
 
-        # ── 1. Kiểm tra cú pháp (py_compile) ───────────────────────────────────
-        proc = subprocess.run(
-            [sys.executable, "-m", "py_compile", target_path],
-            capture_output=True,
-            text=True,
-        )
-
-        if proc.returncode != 0:
-            syntax_err = (proc.stderr or proc.stdout).strip()
-            _print_step("❌", "Validation", f"{RED}Lỗi cú pháp:{RESET}\n  {syntax_err}")
-            return self._handle_failure(ctx, f"Lỗi cú pháp: {syntax_err}")
-
-        _print_step("✅", "Validation", f"{GREEN}Cú pháp hợp lệ!{RESET}")
+        _print_step("✅", "Validation", f"{GREEN}Cú pháp hợp lệ trên tất cả {len(ctx.state.code_fix.files)} file!{RESET}")
 
         # ── 2. Tự động chạy test suite hoặc thực thi script để kiểm tra logic ────
         _print_step("🧪", "Validation", "2/2. Tự động chạy test & kiểm tra logic...")
@@ -1038,11 +1135,11 @@ class ReportNode(BaseNode[BugFixState]):
             f"  🐛 Loại lỗi : {ctx.state.bug_type.value.upper() if ctx.state.bug_type else 'N/A'}",
         ]
 
-        if ctx.state.code_fix:
-            lines += [
-                f"  📄 File sửa : {ctx.state.code_fix.target_file}",
-                f"  📝 Thay đổi : {ctx.state.code_fix.changes_summary}",
-            ]
+        if ctx.state.code_fix and ctx.state.code_fix.files:
+            lines.append(f"  📄 Danh sách file đã sửa ({len(ctx.state.code_fix.files)} file):")
+            for ffix in ctx.state.code_fix.files:
+                lines.append(f"     • {CYAN}{ffix.target_file}{RESET}: {ffix.changes_summary}")
+            lines.append(f"  💡 Nguyên nhân/Giải pháp: {ctx.state.code_fix.explanation}")
 
         if ctx.state.replan_count > 0:
             lines.append(f"  🔄 Số lần replan        : {ctx.state.replan_count}")
@@ -1072,24 +1169,17 @@ class ReportNode(BaseNode[BugFixState]):
         return End(report)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# GRAPH DEFINITION  (GraphBuilder API — pydantic-graph mới)
-# ══════════════════════════════════════════════════════════════════════════════
 
-# Bước 1: Khởi tạo builder với kiểu State và Output
+# GRAPH DEFINITION  (GraphBuilder API — pydantic-graph mới)
 _builder = GraphBuilder(
     state_type=BugFixState,
-    input_type=ProjectInitializerNode,  # inputs= của run() là node instance đầu tiên
-    output_type=str,                    # kiểu trả về của End[str] trong ReportNode
-    auto_instrument=False,              # tắt telemetry span mặc định
+    input_type=ProjectInitializerNode,  
+    output_type=str,                    
+    auto_instrument=False,             
 )
 
-# Bước 2: Kết nối __start__ → ProjectInitializerNode (bắt buộc phải explicit)
-# start_node là entry point đặc biệt nhận inputs từ graph.run(inputs=...)
 _builder.add_edge(_builder.start_node, ProjectInitializerNode)
 
-# Bước 3: Đăng ký các node còn lại — builder tự phân tích return-type hints
-# để build edges giữa các node với nhau
 _builder.add(
     _builder.node(ProjectInitializerNode),
     _builder.node(InputAnalyzerNode),
@@ -1103,16 +1193,14 @@ _builder.add(
     _builder.node(ReportNode),
 )
 
-# Bước 4: Build — trả về Graph object đã validated
 bug_fix_graph = _builder.build()
-# ══════════════════════════════════════════════════════════════════════════════
-# ENTRY POINT
-# ══════════════════════════════════════════════════════════════════════════════
 
+
+
+# ENTRY POINT
 async def main() -> None:
     """Khởi chạy PyFix-Agents CLI (chạy độc lập, kết nối tới MCP Server qua HTTP)."""
     print(f"{CYAN}🔗 MCP Client kết nối tới MCP Server tại {MCP_SERVER_URL}{RESET}")
-    print(f"{YELLOW}💡 Đảm bảo bạn đã chạy 'python mcp_server.py' ở một terminal/luồng riêng.{RESET}\n")
 
     state = BugFixState()
     try:
