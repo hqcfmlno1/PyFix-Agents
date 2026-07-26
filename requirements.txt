@@ -1,0 +1,10 @@
+# PyFix-Agents — Dependencies
+# Python >= 3.10 required
+
+# Core AI framework
+pydantic-ai[gemini]>=0.4.0
+pydantic-graph>=0.4.0
+pydantic-ai-slim[mcp]
+
+# Utilities
+python-dotenv>=1.0.0
