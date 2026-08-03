@@ -1,0 +1,159 @@
+"""
+Data Models — BugType, StackFrame, BugReport, PlanStep, CodeFix, BugFixState, ...
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ── Bug Type & Complexity ───────────────────────────────────────────────────
+class BugType(str, Enum):
+    """Phân loại lỗi chính cho Unhandled Runtime Exception."""
+    DATA_DRIVEN_RUNTIME = "data_driven_runtime"   # Lỗi do data sai schema / dev hiểu sai schema (KeyError, TypeError, ValueError, Pydantic, ...)
+    LOGIC_DRIVEN_RUNTIME = "logic_driven_runtime" # Lỗi do logic thuật toán sai ở case đặc biệt (IndexError, ZeroDivisionError, UnboundLocalError, ...)
+
+
+class BugComplexity(str, Enum):
+    """Đánh giá độ phức tạp của lỗi."""
+    SIMPLE = "simple"     # Lỗi đơn giản 1 frame, chỉ cần DirectFix
+    COMPLEX = "complex"   # Lỗi phức tạp nhiều frame / multi-file, cần Plan nhiều bước
+
+
+# ── Stack Frame (Call Stack nội bộ dự án) ──────────────────────────────────
+class StackFrame(BaseModel):
+    """Một frame trong Call Stack của dự án (đã lọc bỏ thư viện ngoài / venv / stdlib)."""
+    file_path: str = Field(description="Đường dẫn tương đối của file trong dự án")
+    line_number: int = Field(description="Số dòng code xuất hiện trong traceback log")
+    function_name: str = Field(default="", description="Tên hàm hoặc phương thức được gọi tại frame này")
+    code_snippet: str = Field(default="", description="Đoạn mã nguồn hiển thị trong traceback log")
+    role: str = Field(default="caller", description="Vai trò: 'crash_point' (file ném lỗi crash) hoặc 'caller' (hàm gọi truyền dữ liệu)")
+
+
+# ── Bug Report (output từ InputAnalyzerNode) ─────────────────────────────────
+class BugReport(BaseModel):
+    """Output có cấu trúc từ Input Analyzer Agent — Phân tích Unhandled Runtime Exception."""
+    bug_types: List[BugType] = Field(description="Danh sách loại lỗi (data_driven_runtime hoặc logic_driven_runtime)")
+    error_class: str = Field(default="", description="Tên Exception class cụ thể (VD: KeyError, IndexError, TypeError)")
+    error_message: str = Field(default="", description="Thông điệp lỗi chi tiết kèm theo Exception (VD: 'user_id', 'list index out of range')")
+    stack_trace: List[StackFrame] = Field(default_factory=list, description="Danh sách các frame trong Call Stack dự án theo thứ tự gọi (từ caller đến crash_point)")
+    target_file: Optional[str] = Field(default=None, description="File crash chính trong dự án")
+    error_line: Optional[int] = Field(default=None, description="Dòng code crash chính trong dự án")
+    runtime_input_data: Optional[str] = Field(default=None, description="Dữ liệu đầu vào runtime gây crash (nếu có)")
+    explanation: str = Field(default="", description="Giải thích ngắn gọn chẩn đoán bề mặt cho người dùng")
+    want_plan: bool = Field(default=False, description="User có muốn xem/duyệt plan trước khi sửa hay không")
+
+
+# ── Plan Step ────────────────────────────────────────────────────────────────
+class PlanStep(BaseModel):
+    """Một bước cụ thể trong kế hoạch sửa lỗi."""
+    step_id: int = Field(description="Số thứ tự bước (1, 2, 3...)")
+    title: str = Field(description="Tiêu đề tóm tắt ngắn gọn bước sửa")
+    target_file: str = Field(description="Đường dẫn tương đối của file cần chỉnh sửa")
+    target_lines: List[int] = Field(default_factory=list, description="Danh sách các dòng liên quan cần đọc/sửa trong target_file (VD: [40, 42, 45])")
+    description: str = Field(description="Hướng dẫn kỹ thuật chi tiết những đoạn code/hàm cần sửa đổi")
+    acceptance_criteria: str = Field(default="", description="Tiêu chí nghiệm thu hoàn thành bước này")
+
+
+# ── Direct Fix (Lỗi đơn giản không cần Plan) ─────────────────────────────────
+class DirectFix(BaseModel):
+    """Sửa lỗi trực tiếp nhanh cho các bug đơn giản — Dùng Chunk-Based Patching."""
+    target_file: str = Field(description="File cần sửa")
+    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa start_line, end_line và new_lines")
+    diff_summary: str = Field(default="", description="Tóm tắt sửa đổi")
+    explanation: str = Field(description="Giải thích nguyên nhân & cách sửa")
+
+
+# ── Patch Hunk (Chunk-Based Patch) ──────────────────────────────────────────
+class PatchHunk(BaseModel):
+    """Một đoạn sửa đổi cụ thể trong file (chunk-based). Chỉ thay thế đúng phần mã nguồn cần sửa."""
+    start_line: int = Field(description="Dòng bắt đầu của đoạn cần thay thế trong file gốc (1-indexed, inclusive)")
+    end_line: int = Field(description="Dòng kết thúc của đoạn cần thay thế trong file gốc (1-indexed, inclusive)")
+    new_lines: str = Field(description="Nội dung mới (một hoặc nhiều dòng) thay thế cho đoạn [start_line, end_line]. Giữ nguyên indentation Python.")
+    hunk_explanation: str = Field(default="", description="Giải thích ngắn gọn tại sao cần thay đổi đoạn này")
+
+
+# ── Code Fix ─────────────────────────────────────────────────────────────────
+class SingleFileFix(BaseModel):
+    """Chi tiết sửa đổi cho một file cụ thể — Dùng danh sách PatchHunk thay vì toàn bộ nội dung file."""
+    target_file: str = Field(description="Đường dẫn tương đối của file cần sửa")
+    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa start_line, end_line và new_lines")
+    changes_summary: str = Field(description="Tóm tắt tổng quan những thay đổi trong file này")
+
+
+class CodeFix(BaseModel):
+    """Output từ Coder Agent."""
+    files: List[SingleFileFix] = Field(default_factory=list, description="Danh sách các file cần sửa")
+    explanation: str = Field(description="Giải thích nguyên nhân gốc rễ và giải pháp")
+
+
+# ── Replan History ───────────────────────────────────────────────────────────
+class RePlanHistory(BaseModel):
+    """Lưu lịch sử các lần replan."""
+    revision: int
+    feedback: str
+    rejected_plan_summary: str
+
+
+# ── State ────────────────────────────────────────────────────────────────────
+class BugFixState(BaseModel):
+    """
+    State trung tâm — lưu toàn bộ dữ liệu qua mọi node.
+    Mutable: mỗi node đọc và cập nhật state này.
+    """
+
+    # ── Phase 1: Project ────────────────────────────────────────────────────
+    repo_path: str = ""
+    is_repo_valid: bool = False
+    project_tree: str = ""
+
+    # ── Phase 2: Input & Assessment ─────────────────────────────────────────
+    raw_user_input: str = ""
+    runtime_input_data: Optional[str] = None
+    bug_types: List[BugType] = Field(default_factory=list)
+    target_file: Optional[str] = None
+    error_file: Optional[str] = None
+    error_line: Optional[int] = None
+    error_class: Optional[str] = None
+    error_message: Optional[str] = None
+    stack_trace: List[StackFrame] = Field(default_factory=list)
+    want_plan: bool = False
+    want_apply: bool = False
+    missing_fields: List[str] = Field(default_factory=list)
+    bug_explanation: str = ""
+    complexity: BugComplexity = BugComplexity.COMPLEX
+
+    # ── Phase 3: DirectFix & Planning ────────────────────────────────────────
+    direct_fix: Optional[DirectFix] = None
+    direct_fix_fail_count: int = 0
+    max_direct_fix_retries: int = 2
+
+    current_plan: List[PlanStep] = Field(default_factory=list)
+    current_step_index: int = 0
+    plan_approved: bool = False
+    replan_count: int = 0
+    max_replan_limit: int = 3
+    user_plan_feedback: Optional[str] = None
+    plan_history: List[RePlanHistory] = Field(default_factory=list)
+
+    # ── Phase 4: Execution ──────────────────────────────────────────────────
+    step_max_retries: int = 3
+    files_context: Dict[str, str] = Field(default_factory=dict)
+    code_fix: Optional[CodeFix] = None
+    execution_logs: List[str] = Field(default_factory=list)
+    applied_diffs_history: List[Dict] = Field(default_factory=list)
+    action_history: List[str] = Field(default_factory=list)
+
+    # ── Phase 5: Validation ─────────────────────────────────────────────────
+    validation_passed: bool = False
+    validation_errors: List[str] = Field(default_factory=list)
+    retry_count: int = 0
+    surrendered: bool = False
+
+    # ── Phase 6: Report ─────────────────────────────────────────────────────
+    final_report: Optional[str] = None
+
+    model_config = {"arbitrary_types_allowed": True}

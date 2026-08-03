@@ -1,106 +1,220 @@
 """
-Các tool:
-  • read_file               — đọc nội dung file có đánh số dòng
-  • list_directory          — hiển thị cây thư mục
-  • get_file_context        — đọc file chính + các import local
-  • run_python_syntax_check — kiểm tra cú pháp py_compile
-  • search_in_codebase      — tìm kiếm text trong codebase
-
-Human approval (write / run command) được xử lý phía client.
+PyFix MCP Server v2
+Tools:
+  • read_file   — đọc file Python (hỗ trợ đọc theo khoảng dòng) + liệt kê symbols
+  • write_file  — đề xuất ghi code mới (ghi tạm, chờ hệ thống duyệt)
+  • list_dir    — liệt kê cấu trúc thư mục
+  • run_linter  — chạy py_compile kiểm tra cú pháp
 """
 
 from __future__ import annotations
 
 import ast
-import fnmatch
 import os
 import subprocess
 import sys
 from typing import Optional
+
 from mcp.server.fastmcp import FastMCP
 
 # ─────────────────────────────────────────────────────────────────────────────
 server = FastMCP(
     "PyFix-MCP-Server",
     instructions=(
-        "Đây là MCP Server của PyFix-Agents. "
-        "Cung cấp các tool đọc file và kiểm tra cú pháp Python. "
-        "Dùng các tool này để đọc và phân tích codebase trước khi đề xuất bản fix."
+        "MCP Server của PyFix-Agents v2. "
+        "Cung cấp tool đọc/ghi file, liệt kê thư mục và kiểm tra cú pháp Python."
     ),
 )
 
+BLOCKED_SEGMENTS = {"site-packages", ".venv", "venv", "env"}
 
-# TOOL 1 — read_file
+
+def _is_blocked_path(path: str) -> bool:
+    """Không cho phép đọc/ghi file trong venv hoặc site-packages."""
+    parts = os.path.normpath(path).split(os.sep)
+    return bool(BLOCKED_SEGMENTS.intersection(parts))
+
+
+def _extract_symbols(source: str) -> list[dict]:
+    """Trích xuất danh sách function và class từ source code."""
+    symbols: list[dict] = []
+    try:
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                symbols.append({
+                    "type": "function",
+                    "name": node.name,
+                    "line": node.lineno,
+                    "end_line": node.end_lineno or node.lineno,
+                })
+            elif isinstance(node, ast.ClassDef):
+                symbols.append({
+                    "type": "class",
+                    "name": node.name,
+                    "line": node.lineno,
+                    "end_line": node.end_lineno or node.lineno,
+                })
+    except SyntaxError:
+        pass  # File có lỗi cú pháp thì bỏ qua phần symbol
+    return symbols
+
+
+# ── TOOL 1: read_file ────────────────────────────────────────────────────────
 @server.tool()
-def read_file(file_path: str) -> dict:
+def read_file(
+    path: str,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+) -> dict:
     """
-    Đọc nội dung của một file (Python hoặc text).
-    Trả về nội dung gốc và phiên bản có đánh số dòng.
+    Đọc nội dung file Python. Nếu chỉ cần đọc một đoạn cụ thể,
+    truyền start_line và end_line để tiết kiệm token.
+    Kết quả trả về bao gồm nội dung code và danh sách tất cả
+    các symbol (function, class) trong file kèm vị trí dòng của chúng.
 
     Args:
-        file_path: Đường dẫn đến file cần đọc (tuyệt đối hoặc tương đối).
+        path: Đường dẫn đến file .py cần đọc.
+              Không được trỏ vào file trong /venv/ hoặc /site-packages/.
+        start_line: Dòng bắt đầu đọc (1-indexed, tùy chọn).
+        end_line: Dòng kết thúc đọc (1-indexed, tùy chọn).
+                  Nếu không truyền start_line và end_line thì đọc toàn bộ file.
     """
+    abs_path = os.path.abspath(path)
+
+    if _is_blocked_path(abs_path):
+        return {"success": False, "error": f"Không được đọc file trong venv/site-packages: {abs_path}"}
+    if not os.path.exists(abs_path):
+        return {"success": False, "error": f"File không tồn tại: {abs_path}"}
+    if not os.path.isfile(abs_path):
+        return {"success": False, "error": f"Không phải file: {abs_path}"}
+
     try:
-        abs_path = os.path.abspath(file_path)
-        if not os.path.exists(abs_path):
-            return {"success": False, "error": f"File không tồn tại: {abs_path}"}
-        if not os.path.isfile(abs_path):
-            return {"success": False, "error": f"Không phải file: {abs_path}"}
-
         with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
-            content = fh.read()
+            full_content = fh.read()
 
-        lines = content.splitlines()
-        numbered = "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(lines))
+        all_lines = full_content.splitlines()
+        total_lines = len(all_lines)
+
+        # Luôn trích xuất symbols từ toàn bộ file
+        symbols = _extract_symbols(full_content)
+
+        # Xác định khoảng dòng cần trả về
+        s = max(1, start_line) if start_line else 1
+        e = min(total_lines, end_line) if end_line else total_lines
+        selected = all_lines[s - 1 : e]
+
+        numbered = "\n".join(f"{s + i:4d} | {line}" for i, line in enumerate(selected))
 
         return {
             "success": True,
             "file_path": abs_path,
-            "content": content,
+            "content": "\n".join(selected),
             "content_with_line_numbers": numbered,
-            "line_count": len(lines),
+            "total_lines": total_lines,
+            "showing_lines": f"{s}-{e}",
+            "symbols": symbols,
             "size_bytes": os.path.getsize(abs_path),
         }
     except Exception as exc:
         return {"success": False, "error": str(exc)}
 
 
-
-# TOOL 2 — list_directory
+# ── TOOL 2: write_file ──────────────────────────────────────────────────────
 @server.tool()
-def list_directory(
-    dir_path: str,
-    max_depth: int = 3,
-    include_extensions: str = ".py,.txt,.json,.yaml,.yml,.toml,.md,.cfg,.ini,.env",
-) -> str:
+def write_file(
+    path: str,
+    content: str,
+    start_line: Optional[int] = None,
+    end_line: Optional[int] = None,
+) -> dict:
     """
-    Liệt kê cấu trúc thư mục dưới dạng cây ASCII.
+    Ghi code mới vào file. Thay đổi sẽ được lưu tạm trên đĩa —
+    hệ thống sẽ backup bản gốc, kiểm tra, và yêu cầu người dùng
+    duyệt trước khi chấp nhận vĩnh viễn.
+    Nếu chỉ sửa một đoạn cụ thể, truyền start_line và end_line
+    để chỉ thay đúng đoạn đó, giữ nguyên phần còn lại.
 
     Args:
-        dir_path: Đường dẫn đến thư mục cần liệt kê.
-        max_depth: Độ sâu tối đa của cây (mặc định 3).
-        include_extensions: Danh sách extension hiển thị, phân cách bằng dấu phẩy.
+        path: Đường dẫn file cần sửa.
+        content: Code mới được đề xuất.
+        start_line: Dòng bắt đầu thay thế (1-indexed, tùy chọn).
+        end_line: Dòng kết thúc thay thế (1-indexed, tùy chọn).
+                  Nếu không truyền start_line và end_line thì ghi đè toàn bộ file.
+                  Nên lấy start_line và end_line từ kết quả của read_file.
     """
-    dir_path = os.path.abspath(dir_path)
-    if not os.path.isdir(dir_path):
-        return f"Lỗi: Thư mục không tồn tại: {dir_path}"
+    abs_path = os.path.abspath(path)
 
-    exts = {e.strip() for e in include_extensions.split(",")}
+    if _is_blocked_path(abs_path):
+        return {"success": False, "error": f"Không được ghi file trong venv/site-packages: {abs_path}"}
+
+    try:
+        # Đọc nội dung cũ (nếu file tồn tại)
+        old_content = ""
+        if os.path.exists(abs_path):
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as fh:
+                old_content = fh.read()
+
+        # Tính nội dung mới
+        if start_line is not None and end_line is not None and old_content:
+            old_lines = old_content.splitlines()
+            s = max(1, start_line) - 1  # convert to 0-indexed
+            e = min(len(old_lines), end_line)
+            new_lines = old_lines[:s] + content.splitlines() + old_lines[e:]
+            new_content = "\n".join(new_lines)
+            if old_content.endswith("\n"):
+                new_content += "\n"
+        else:
+            new_content = content
+
+        # Tạo thư mục nếu chưa tồn tại
+        dir_path = os.path.dirname(abs_path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+
+        # Ghi tạm xuống đĩa
+        with open(abs_path, "w", encoding="utf-8") as fh:
+            fh.write(new_content)
+
+        return {
+            "success": True,
+            "file_path": abs_path,
+            "action": "partial_replace" if (start_line and end_line) else "full_overwrite",
+            "message": f"Đã ghi tạm file: {abs_path} (chờ hệ thống duyệt).",
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+# ── TOOL 3: list_dir ────────────────────────────────────────────────────────
+@server.tool()
+def list_dir(path: str) -> str:
+    """
+    Liệt kê toàn bộ file và thư mục trong một đường dẫn.
+    Dùng để hiểu cấu trúc project hoặc xác định đường dẫn
+    đúng của file khi import statement không rõ ràng.
+
+    Args:
+        path: Đường dẫn thư mục cần liệt kê.
+    """
+    abs_path = os.path.abspath(path)
+    if not os.path.isdir(abs_path):
+        return f"Lỗi: Thư mục không tồn tại: {abs_path}"
+
     skip_dirs = {
         ".git", "__pycache__", ".venv", "venv", "env",
         "node_modules", ".pytest_cache", ".mypy_cache",
         "dist", "build", ".eggs", ".tox", ".idea", ".vscode",
     }
-    always_show = {".env", ".gitignore", "requirements.txt", "Makefile", "Dockerfile"}
 
-    lines = [f"📁 {os.path.basename(dir_path)}/"]
+    lines = [f"📁 {os.path.basename(abs_path)}/"]
 
-    def walk(path: str, prefix: str = "", depth: int = 0) -> None:
-        if depth >= max_depth:
+    def walk(dir_path: str, prefix: str = "", depth: int = 0) -> None:
+        if depth >= 3:
             return
         try:
             entries = sorted(
-                os.scandir(path), key=lambda e: (not e.is_dir(), e.name.lower())
+                os.scandir(dir_path), key=lambda e: (not e.is_dir(), e.name.lower())
             )
         except PermissionError:
             return
@@ -116,110 +230,28 @@ def list_directory(
                 lines.append(f"{prefix}{connector}📁 {entry.name}/")
                 walk(entry.path, prefix + ext_prefix, depth + 1)
             else:
-                _, ext = os.path.splitext(entry.name)
-                if ext in exts or entry.name in always_show:
-                    size = entry.stat().st_size
-                    size_str = f" ({size}B)" if size < 10_000 else f" ({size // 1024}KB)"
-                    lines.append(f"{prefix}{connector}📄 {entry.name}{size_str}")
+                size = entry.stat().st_size
+                size_str = f" ({size}B)" if size < 10_000 else f" ({size // 1024}KB)"
+                lines.append(f"{prefix}{connector}📄 {entry.name}{size_str}")
 
-    walk(dir_path)
+    walk(abs_path)
     return "\n".join(lines)
 
 
-
-# TOOL 3 — get_file_context
+# ── TOOL 4: run_linter ──────────────────────────────────────────────────────
 @server.tool()
-def get_file_context(file_path: str, repo_path: str, max_extra_files: int = 4) -> dict:
+def run_linter(path: str) -> dict:
     """
-    Đọc file chính và tự động phát hiện + đọc các module Python local được import.
-    Kỹ thuật Selective File Loading — tối đa 5 file (1 chính + max_extra_files phụ).
+    Chạy linter trên file Python để kiểm tra code vừa được
+    gen ra có lỗi syntax hoặc lỗi tiềm ẩn cơ bản không.
+    Agent chủ động gọi tool này ngay sau khi gen code mới
+    để phát hiện và sửa lỗi ngớ ngẩn sớm, tránh đợi đến
+    bước validate cuối mới phát hiện.
 
     Args:
-        file_path: File cần phân tích.
-        repo_path: Đường dẫn gốc của dự án (để tìm module local).
-        max_extra_files: Số file import phụ tối đa (mặc định 4).
+        path: Đường dẫn đến file Python cần kiểm tra.
     """
-    file_path = os.path.abspath(file_path)
-    repo_path = os.path.abspath(repo_path)
-    collected: dict[str, str] = {}
-    errors: list[str] = []
-
-    def safe_read(fp: str) -> Optional[str]:
-        try:
-            with open(fp, "r", encoding="utf-8", errors="replace") as fh:
-                return fh.read()
-        except Exception as exc:
-            errors.append(f"Không đọc được {fp}: {exc}")
-            return None
-
-    # ── Đọc file chính ──────────────────────────────────────────────────────
-    main_content = safe_read(file_path)
-    if main_content is None:
-        return {
-            "success": False,
-            "error": f"Không đọc được file chính: {file_path}",
-            "errors": errors,
-        }
-    collected[file_path] = main_content
-
-    # ── Parse imports để tìm module local ────────────────────────────────────
-    local_imports: list[str] = []
-    try:
-        tree = ast.parse(main_content)
-        search_bases = [repo_path, os.path.dirname(file_path)]
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                mod_name = node.module.split(".")[0]
-                for base in search_bases:
-                    candidate = os.path.join(base, f"{mod_name}.py")
-                    if os.path.isfile(candidate) and candidate != file_path:
-                        local_imports.append(candidate)
-                        break
-            elif isinstance(node, ast.Import):
-                for alias in node.names:
-                    mod_name = alias.name.split(".")[0]
-                    for base in search_bases:
-                        candidate = os.path.join(base, f"{mod_name}.py")
-                        if os.path.isfile(candidate) and candidate != file_path:
-                            local_imports.append(candidate)
-                            break
-    except SyntaxError:
-        errors.append(
-            "File có lỗi cú pháp, không parse được imports (vẫn đọc được file chính)."
-        )
-
-    # ── Đọc các file phụ (dedup, giới hạn) ──────────────────────────────────
-    seen_imports: list[str] = []
-    for imp_path in dict.fromkeys(local_imports):  # preserve order, dedup
-        if imp_path not in collected and len(collected) - 1 < max_extra_files:
-            content = safe_read(imp_path)
-            if content is not None:
-                collected[imp_path] = content
-                seen_imports.append(imp_path)
-
-    return {
-        "success": True,
-        "main_file": file_path,
-        "files": collected,
-        "imported_local_files": seen_imports,
-        "total_files_read": len(collected),
-        "errors": errors,
-    }
-
-
-
-# TOOL 4 — run_python_syntax_check
-@server.tool()
-def run_python_syntax_check(file_path: str) -> dict:
-    """
-    Kiểm tra cú pháp Python bằng py_compile.
-    Chỉ đọc/kiểm tra — KHÔNG ghi, KHÔNG sửa file.
-
-    Args:
-        file_path: Đường dẫn đến file Python cần kiểm tra.
-    """
-    abs_path = os.path.abspath(file_path)
+    abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
         return {"passed": False, "error": f"File không tồn tại: {abs_path}"}
 
@@ -244,122 +276,6 @@ def run_python_syntax_check(file_path: str) -> dict:
     }
 
 
-
-# TOOL 5 — search_in_codebase
-@server.tool()
-def search_in_codebase(
-    repo_path: str,
-    query: str,
-    file_pattern: str = "*.py",
-    max_results: int = 30,
-) -> list:
-    """
-    Tìm kiếm text/pattern trong toàn bộ codebase (case-insensitive).
-    Hữu ích khi cần tìm nơi định nghĩa hàm hoặc biến liên quan đến lỗi.
-
-    Args:
-        repo_path: Đường dẫn đến thư mục dự án.
-        query: Chuỗi cần tìm kiếm.
-        file_pattern: Pattern file (mặc định '*.py').
-        max_results: Số kết quả tối đa trả về (mặc định 30).
-    """
-    repo_path = os.path.abspath(repo_path)
-    results: list[dict] = []
-    skip_dirs = {".git", "__pycache__", ".venv", "venv", "node_modules"}
-    query_lower = query.lower()
-
-    for root, dirs, files in os.walk(repo_path):
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for fname in files:
-            if fnmatch.fnmatch(fname, file_pattern):
-                fpath = os.path.join(root, fname)
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-                        for line_no, line in enumerate(fh, start=1):
-                            if query_lower in line.lower():
-                                results.append(
-                                    {
-                                        "file": fpath,
-                                        "line_number": line_no,
-                                        "line_content": line.rstrip(),
-                                    }
-                                )
-                                if len(results) >= max_results:
-                                    return results
-                except Exception:
-                    continue
-
-
-
-# TOOL 6 — run_project_tests
-@server.tool()
-def run_project_tests(repo_path: str, target_file: str = "") -> dict:
-    """
-    Tự động chạy test suite (pytest/unittest) hoặc thực thi file Python để kiểm tra kết quả.
-
-    Args:
-        repo_path: Đường dẫn gốc dự án.
-        target_file: File Python cần chạy kiểm tra (nếu có).
-    """
-    abs_repo = os.path.abspath(repo_path)
-    abs_target = os.path.abspath(os.path.join(abs_repo, target_file)) if target_file else ""
-
-    # 1. Tìm file test trong repo
-    test_files = []
-    for root, dirs, files in os.walk(abs_repo):
-        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", ".venv", "venv", "node_modules"}]
-        for f in files:
-            if (f.startswith("test_") or f.endswith("_test.py")) and f.endswith(".py"):
-                test_files.append(os.path.join(root, f))
-
-    # Nếu có file test -> chạy pytest
-    if test_files:
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-m", "pytest", abs_repo, "-v"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            passed = proc.returncode == 0
-            return {
-                "test_type": "pytest",
-                "passed": passed,
-                "stdout": proc.stdout,
-                "stderr": proc.stderr,
-                "message": "✅ Pytest đã vượt qua thành công." if passed else "❌ Pytest thất bại.",
-            }
-        except Exception as exc:
-            return {"test_type": "pytest", "passed": False, "error": str(exc)}
-
-    # 2. Nếu không có file test riêng, chạy trực tiếp file target_file bằng Python
-    if abs_target and os.path.isfile(abs_target):
-        try:
-            proc = subprocess.run(
-                [sys.executable, abs_target],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            passed = proc.returncode == 0
-            return {
-                "test_type": "script_execution",
-                "passed": passed,
-                "stdout": proc.stdout,
-                "stderr": proc.stderr,
-                "message": "✅ Script thực thi thành công." if passed else "❌ Script bị lỗi runtime.",
-            }
-        except Exception as exc:
-            return {"test_type": "script_execution", "passed": False, "error": str(exc)}
-
-    return {
-        "test_type": "none",
-        "passed": True,
-        "message": "Không tìm thấy file test hoặc script để thực thi.",
-    }
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    server.run(transport='streamable-http')
-
+    server.run(transport="streamable-http")
