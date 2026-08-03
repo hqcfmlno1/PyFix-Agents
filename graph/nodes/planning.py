@@ -1,124 +1,84 @@
 """
-PlanningNode — Planner Agent nạp Plan Template và tạo danh sách PlanStep sửa lỗi dựa trên stack_trace.
+PlanningNode — Planner Agent phân tích Traceback và quyết định sinh ra DirectFix hoặc Plan.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING, Union
 
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import planner_agent
-from graph.config import MODEL_NAME, RESET, YELLOW
+from graph.config import BOLD, CYAN, MODEL_NAME, RED, RESET
 from graph.helpers import print_step
-from graph.models import BugFixState, BugType, PlanStep, RePlanHistory
-from graph.prompts import PLAN_TEMPLATES
+from graph.models import BugFixState, DirectFix, PlanWrapper
 
 if TYPE_CHECKING:
+    from graph.nodes.execution import ExecutionNode
     from graph.nodes.plan_interceptor import PlanInterceptorNode
+    from graph.nodes.validation import ValidationNode
 
 
 @dataclass
 class PlanningNode(BaseNode[BugFixState]):
     """
-    [Agent] Dùng LLM tạo kế hoạch sửa lỗi dựa trên stack_trace có cấu trúc và Plan Template tương ứng.
+    [Agent] Dùng Planner Agent phân tích mã nguồn và quyết định:
+    - Nếu đơn giản: Trả về DirectFix (chỉ thị 1 bước). Chuyển thẳng sang ExecutionNode (Coder thực thi).
+    - Nếu phức tạp: Trả về PlanWrapper (nhiều bước). Chuyển sang PlanInterceptorNode để hỏi ý kiến Dev.
     """
 
-    async def run(self, ctx: GraphRunContext[BugFixState]) -> PlanInterceptorNode:
+    async def run(
+        self, ctx: GraphRunContext[BugFixState]
+    ) -> Union[PlanInterceptorNode, ExecutionNode, ValidationNode]:
+        from graph.nodes.execution import ExecutionNode
         from graph.nodes.plan_interceptor import PlanInterceptorNode
+        from graph.nodes.validation import ValidationNode
 
-        if ctx.state.user_plan_feedback:
-            print_step("🔄", "Planner Agent", f"Đang cập nhật plan lần {ctx.state.replan_count + 1}...")
-        else:
-            print_step("🧠", "Planner Agent", f"Đang tạo kế hoạch sửa lỗi với {MODEL_NAME}...")
+        print_step("🧠", "Planner Agent", f"Đang chẩn đoán và quyết định (DirectFix hoặc Plan) với {MODEL_NAME}...")
 
-        selected_templates: List[str] = []
-        for bt in ctx.state.bug_types:
-            key = ""
-            if bt == BugType.DATA_DRIVEN_RUNTIME:
-                key = "DATA_DRIVEN_RUNTIME"
-            elif bt == BugType.LOGIC_DRIVEN_RUNTIME:
-                key = "LOGIC_DRIVEN_RUNTIME"
+        prompt = f"""CHẨN ĐOÁN VÀ QUYẾT ĐỊNH (UNHANDLED RUNTIME EXCEPTION):
+- Ngoại lệ        : {ctx.state.error_class}
+- Thông báo lỗi   : {ctx.state.error_message}
+- Mô tả người dùng: {ctx.state.raw_user_input}
+- Tóm tắt hệ thống: {ctx.state.bug_explanation}
 
-            if key and key in PLAN_TEMPLATES:
-                selected_templates.append(PLAN_TEMPLATES[key])
-
-        templates_prompt_str = "\n\n".join(selected_templates) if selected_templates else PLAN_TEMPLATES["DATA_DRIVEN_RUNTIME"]
-
-        stack_trace_formatted = ""
-        if ctx.state.stack_trace:
-            stack_lines = []
-            for idx, frame in enumerate(ctx.state.stack_trace, start=1):
-                role_str = "[CRASH POINT]" if frame.role == "crash_point" else "[CALLER]"
-                code_str = f" | Code: `{frame.code_snippet}`" if frame.code_snippet else ""
-                stack_lines.append(
-                    f"  Frame {idx} {role_str}: File '{frame.file_path}', dòng {frame.line_number}, hàm `{frame.function_name or 'main'}`{code_str}"
-                )
-            stack_trace_formatted = "\n".join(stack_lines)
-        else:
-            stack_trace_formatted = f"  File crash chính: {ctx.state.target_file or 'N/A'}"
-
-        replan_section = ""
-        if ctx.state.user_plan_feedback and ctx.state.current_plan:
-            old_plan_str = "\n".join(
-                f"  Bước {s.step_id}: {s.title} ({s.target_file}:{s.target_lines}) — {s.description}" for s in ctx.state.current_plan
-            )
-            replan_section = f"""
-⚠ YÊU CẦU ĐIỀU CHỈNH PLAN CŨ:
-Feedback của User: {ctx.state.user_plan_feedback}
-
-Plan cũ đã bị từ chối:
-{old_plan_str}
-
-Hãy tạo danh sách PlanStep mới KHÁC với plan cũ và tuân thủ đúng feedback.
+CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
 """
+        for frame in ctx.state.stack_trace:
+            prompt += f"- File: {frame.file_path}, Line: {frame.line_number}, Function: {frame.function_name}\n"
+            if frame.code_snippet:
+                prompt += f"  Code: {frame.code_snippet}\n"
 
-        types_str = ", ".join([bt.value.upper() for bt in ctx.state.bug_types]) if ctx.state.bug_types else "UNHANDLED_RUNTIME"
+        if ctx.state.execution_logs:
+            prompt += "\nLỊCH SỬ THỬ NGHIỆM THẤT BẠI TRƯỚC ĐÓ (Action History):\n"
+            for log in ctx.state.execution_logs:
+                prompt += f"- {log}\n"
+            prompt += "-> HÃY ĐẢM BẢO KHÔNG LẶP LẠI CÁC CÁCH SỬA ĐÃ THẤT BẠI.\n"
 
-        prompt = f"""UNHANDLED RUNTIME EXCEPTION REPORT:
-- Loại lỗi          : {types_str}
-- Exception Class   : {ctx.state.error_class or 'N/A'}
-- Exception Detail  : {ctx.state.error_message or 'N/A'}
-- Runtime Input Data: {ctx.state.runtime_input_data or 'N/A'}
+        prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Xác định nguyên nhân gốc rễ và trả về DirectFix (nếu lỗi nhỏ, 1 chỗ) hoặc PlanWrapper (nếu lỗi lớn, lan nhiều file)."
 
-DANH SÁCH CALL STACK NỘI BỘ DỰ ÁN (từ caller đến crash_point):
-{stack_trace_formatted}
+        try:
+            result = await planner_agent.run(prompt)
+            output = result.output
 
-CẤU TRÚC DỰ ÁN:
-{ctx.state.project_tree}
+            if isinstance(output, DirectFix):
+                ctx.state.direct_fix = output
+                ctx.state.current_plan = []  # Đảm bảo plan trống
+                print_step("⚡", "Planner", f"Quyết định dùng {CYAN}DirectFix{RESET} (Lỗi đơn giản)")
+                print(f"  {BOLD}Nguyên nhân:{RESET} {output.root_cause}")
+                # DirectFix không cần hỏi duyệt, đi thẳng sang Execution (Coder)
+                return ExecutionNode()
+            else:
+                # isinstance(output, PlanWrapper)
+                ctx.state.current_plan = output.steps
+                ctx.state.direct_fix = None
+                print_step("📜", "Planner", f"Quyết định dùng {CYAN}Plan{RESET} ({len(output.steps)} bước - Lỗi phức tạp)")
+                # Plan cần Human-in-the-loop duyệt
+                return PlanInterceptorNode()
 
-{templates_prompt_str}
-
-{replan_section}
-
-HƯỚNG DẪN DÙNG TOOL & LẬP PLAN:
-1. Dùng tool `read_file` đọc mã nguồn tại các file trong danh sách Call Stack (truyền start_line, end_line xung quanh vị trí dòng lỗi).
-2. Xác định nguyên nhân gốc rễ (Root Cause) gây ra lỗi Unhandled Runtime Exception.
-3. Lập danh sách các `PlanStep` sửa chi tiết: chỉ định rõ target_file, target_lines (các dòng liên quan), description và acceptance_criteria cho từng bước.
-"""
-
-        result = await planner_agent.run(prompt)
-        steps: List[PlanStep] = result.output
-
-        if ctx.state.user_plan_feedback and ctx.state.current_plan:
-            ctx.state.plan_history.append(
-                RePlanHistory(
-                    revision=ctx.state.replan_count,
-                    feedback=ctx.state.user_plan_feedback,
-                    rejected_plan_summary="; ".join(s.title for s in ctx.state.current_plan),
-                )
-            )
-            ctx.state.replan_count += 1
-
-        ctx.state.current_plan = steps
-        ctx.state.user_plan_feedback = None
-        ctx.state.plan_approved = False
-
-        print_step(
-            "✅",
-            "Plan tạo xong",
-            f"Tổng {len(steps)} bước sửa đổi",
-        )
-
-        return PlanInterceptorNode()
+        except Exception as exc:
+            print_step("❌", "Planner Error", f"{RED}Lỗi khi tạo Plan/DirectFix: {exc}{RESET}")
+            ctx.state.validation_errors.append(f"Planner Error: {exc}")
+            ctx.state.retry_count += 1
+            return ValidationNode()

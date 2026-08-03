@@ -50,8 +50,20 @@ class ExecutionNode(BaseNode[BugFixState]):
             last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
             prev_errors_str = f"\nLỖI THỬ LẠI TỪ LẦN TRƯỚC:\n{last_errors}\nHãy điều chỉnh code để vượt qua lỗi này."
 
+        # Wrap DirectFix into a 1-step Plan
         plan_steps = ctx.state.current_plan
-        if not plan_steps:
+        if not plan_steps and ctx.state.direct_fix:
+            plan_steps = [
+                PlanStep(
+                    step_id=1,
+                    title=f"DirectFix: {ctx.state.direct_fix.bug_summary}",
+                    description=ctx.state.direct_fix.fix_description,
+                    target_file=ctx.state.direct_fix.file_path,
+                    target_lines=[ctx.state.direct_fix.error_line],
+                    acceptance_criteria="Áp dụng thành công bản vá DirectFix theo hướng dẫn.",
+                )
+            ]
+        elif not plan_steps:
             plan_steps = [
                 PlanStep(
                     step_id=1,

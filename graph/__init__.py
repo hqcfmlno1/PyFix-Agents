@@ -7,35 +7,43 @@ from __future__ import annotations
 from pydantic_graph import GraphBuilder
 
 from graph.models import BugFixState
-import graph.nodes as nodes
+
+# Import explicitly to populate local namespace for get_type_hints
+from graph.nodes.project_init import ProjectInitializerNode
+from graph.nodes.input_analyzer import InputAnalyzerNode
+from graph.nodes.input_guardrail import InputGateGuardrailNode
+from graph.nodes.need_more_info import NeedMoreInfoNode
+from graph.nodes.bug_explainer import BugExplainerNode
+from graph.nodes.planning import PlanningNode
+from graph.nodes.plan_interceptor import PlanInterceptorNode
+from graph.nodes.execution import ExecutionNode
+from graph.nodes.validation import ValidationNode
+from graph.nodes.report import ReportNode
+
 
 # ── Xây dựng Graph bằng GraphBuilder (pydantic-graph) ───────────────────
 _builder = GraphBuilder(
     state_type=BugFixState,
-    input_type=nodes.ProjectInitializerNode,
+    input_type=ProjectInitializerNode,
     output_type=str,
     auto_instrument=False,
 )
 
-_builder.add_edge(_builder.start_node, nodes.ProjectInitializerNode)
+_builder.add_edge(_builder.start_node, ProjectInitializerNode)
 
 _builder.add(
-    _builder.node(nodes.ProjectInitializerNode),
-    _builder.node(nodes.InputAnalyzerNode),
-    _builder.node(nodes.InputGateGuardrailNode),
-    _builder.node(nodes.NeedMoreInfoNode),
-    _builder.node(nodes.BugExplainerNode),
-    _builder.node(nodes.PlanningStrategyNode),
-    _builder.node(nodes.DirectFixCreationNode),
-    _builder.node(nodes.PlanningNode),
-    _builder.node(nodes.PlanInterceptorNode),
-    _builder.node(nodes.ExecutionNode),
-    _builder.node(nodes.ValidationNode),
-    _builder.node(nodes.ReportNode),
+    _builder.node(ProjectInitializerNode),
+    _builder.node(InputAnalyzerNode),
+    _builder.node(InputGateGuardrailNode),
+    _builder.node(NeedMoreInfoNode),
+    _builder.node(BugExplainerNode),
+    _builder.node(PlanningNode),
+    _builder.node(PlanInterceptorNode),
+    _builder.node(ExecutionNode),
+    _builder.node(ValidationNode),
+    _builder.node(ReportNode),
 )
 
 bug_fix_graph = _builder.build()
 
 __all__ = ["bug_fix_graph", "BugFixState", "ProjectInitializerNode"]
-
-
