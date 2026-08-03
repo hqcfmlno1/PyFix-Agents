@@ -19,7 +19,6 @@ from graph.helpers import print_step, resolve_target_path
 from graph.models import BugComplexity, BugFixState
 
 if TYPE_CHECKING:
-    from graph.nodes.direct_fix import DirectFixCreationNode
     from graph.nodes.planning import PlanningNode
     from graph.nodes.report import ReportNode
 
@@ -32,8 +31,7 @@ class ValidationNode(BaseNode[BugFixState]):
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[DirectFixCreationNode, PlanningNode, ReportNode]:
-        from graph.nodes.direct_fix import DirectFixCreationNode
+    ) -> Union[PlanningNode, ReportNode]:
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
 
@@ -111,8 +109,7 @@ class ValidationNode(BaseNode[BugFixState]):
 
     def _handle_failure(
         self, ctx: GraphRunContext[BugFixState], error_msg: str
-    ) -> Union[DirectFixCreationNode, PlanningNode, ReportNode]:
-        from graph.nodes.direct_fix import DirectFixCreationNode
+    ) -> Union[PlanningNode, ReportNode]:
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
 
@@ -120,27 +117,12 @@ class ValidationNode(BaseNode[BugFixState]):
         ctx.state.validation_errors.append(error_msg)
         ctx.state.action_history.append(f"Lần thử Replan {ctx.state.replan_count + 1}: Bản patch thất bại khi kiểm thử runtime. Chi tiết lỗi: {error_msg}")
 
-        # Xử lý cho luồng DirectFix (Bug đơn giản)
-
-        if ctx.state.complexity == BugComplexity.SIMPLE:
-            ctx.state.direct_fix_fail_count += 1
-            if ctx.state.direct_fix_fail_count < ctx.state.max_direct_fix_retries:
-                print(f"  {YELLOW}🔄 DirectFix chưa khắc phục được lỗi. Thử lại DirectFix ({ctx.state.direct_fix_fail_count}/{ctx.state.max_direct_fix_retries})...{RESET}")
-                return DirectFixCreationNode()
-            else:
-                print(f"\n  {RED}⚠️ DirectFix thất bại sau {ctx.state.direct_fix_fail_count} lần thử.{RESET}")
-                print(f"  {YELLOW}👉 Đánh giá lại: Bug phức tạp hơn dự kiến -> Thăng cấp sang luồng Planning chi tiết!{RESET}")
-                ctx.state.complexity = BugComplexity.COMPLEX
-                ctx.state.user_plan_feedback = f"DirectFix thất bại sau {ctx.state.max_direct_fix_retries} lần thử. Lỗi runtime: {error_msg}"
-                return PlanningNode()
-
-        # Xử lý cho luồng Detailed Plan (Bug phức tạp)
         if ctx.state.replan_count < ctx.state.max_replan_limit:
             print(f"\n  {RED}❌ Lỗi gốc chưa được khắc phục triệt để.{RESET}")
-            print(f"  {YELLOW}🔄 Quay về Planner để REPLAN lại... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
+            print(f"  {YELLOW}🔄 Quay về Planner để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
             ctx.state.user_plan_feedback = f"Validation thất bại (Lỗi chưa hết). Chi tiết lỗi: {error_msg}"
             return PlanningNode()
         else:
-            print_step("⛔", "Validation", f"{RED}Đã vượt quá {ctx.state.max_replan_limit} lần Replan mà chưa sửa được lỗi gốc. Agent chịu thua.{RESET}")
+            print_step("⛔", "Validation", f"{RED}Đã vượt quá {ctx.state.max_replan_limit} lần thử mà chưa sửa được lỗi gốc. Agent chịu thua.{RESET}")
             ctx.state.surrendered = True
             return ReportNode()

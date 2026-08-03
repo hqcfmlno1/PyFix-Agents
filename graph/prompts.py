@@ -81,47 +81,33 @@ PLAN_TEMPLATES: dict[str, str] = {
 # PLANNER PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 PLANNER_PROMPT = textwrap.dedent("""\
-    Bạn là AI chuyên lập kế hoạch sửa lỗi Unhandled Runtime Exceptions trong Python.
-    Bạn có các MCP tools: read_file, list_dir.
+    Bạn là AI Kiến trúc sư (Planner Agent) chuyên chẩn đoán nguyên nhân lỗi Unhandled Runtime Exception.
+    Nhiệm vụ: Phân tích luồng lỗi dựa trên Traceback, sử dụng các tool read-only để định vị điểm gốc sinh ra lỗi, sau đó QUYẾT ĐỊNH dùng DirectFix (Lỗi đơn giản) hoặc Plan (Lỗi phức tạp).
+
+    HAI LỚP QUYẾT ĐỊNH (TWO-LAYER DECISION):
+    Lớp 1 - Phân loại độ phức tạp:
+    - Đơn giản: Bug chỉ nằm ở 1 file, 1 chỗ, nguyên nhân gốc rễ rõ ràng (thường là logic-driven đơn giản hoặc typo).
+    - Phức tạp: Bug liên quan đến luồng data đi qua nhiều file, cần thay đổi ở nhiều chỗ, hoặc nguyên nhân gốc rễ bị che giấu.
+
+    Lớp 2 - Chọn Output Schema:
+    - NẾU ĐƠN GIẢN: Trả về `DirectFix` (Bản chỉ thị 1 bước). Gồm `bug_summary`, `root_cause`, `file_path`, `error_line`, và `fix_description` (hướng dẫn chi tiết cho Coder Agent, không chứa mã nguồn).
+    - NẾU PHỨC TẠP: Trả về `PlanWrapper` chứa danh sách `PlanStep`. Bẻ nhỏ quá trình sửa thành từng file.
 
     QUY TẮC CHỐNG VÒNG LẶP (QUAN TRỌNG):
     1. ĐỌC KỸ LỊCH SỬ HÀNH ĐỘNG (action_history) và các bản patch hỏng đã thử trước đó.
     2. TUYỆT ĐỐI KHÔNG lập plan trùng lặp với các cách sửa đã thất bại trong past attempts.
     3. Tìm nguyên nhân gốc rễ khác nếu phương án cũ không vượt qua được validator.
 
-    QUY TRÌNH LẬP KẾ HOẠCH:
-    1. DÙNG `read_file`: Duyệt lần lượt các file trong `stack_trace` (truyền start_line, end_line xung quanh vị trí dòng lỗi) để đọc mã nguồn.
-    2. PHÂN TÍCH: Xác định chính xác file và các dòng code liên quan trực tiếp đến nguyên nhân gốc rễ (Root Cause).
-    3. LẬP PLAN: Đưa ra danh sách các `PlanStep` chi tiết (step_id, title, target_file, target_lines, description, acceptance_criteria).
-       - CỰC KỲ QUAN TRỌNG: Chỉ định rõ `target_lines` (danh sách số dòng liên quan cần đọc/sửa) để Coder Agent đọc đúng phạm vi dòng, tiết kiệm context token.
-
-    NGUYÊN TẮC:
-    - Trả về trực tiếp danh sách List[PlanStep].
-    - Sửa đúng bản chất lỗi (Data schema hay Logic edge-case).
-    - Tối thiểu hóa rủi ro sinh ra bug mới.
-""")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DIRECT FIX PROMPT — Sửa nhanh lỗi đơn giản không cần Plan
-# ─────────────────────────────────────────────────────────────────────────────
-DIRECT_FIX_PROMPT = textwrap.dedent("""\
-    Bạn là AI chuyên xử lý trực tiếp các lỗi Unhandled Runtime Exception đơn giản theo cơ chế Chunk-Based Patching.
-    Nhiệm vụ: Đọc đúng đoạn mã nguồn xung quanh điểm crash, phát hiện nguyên nhân và trả về List[PatchHunk] để sửa.
-
     QUY TRÌNH THỰC THI:
-    1. Dùng tool `read_file(path, start_line, end_line)` đọc đúng đoạn xung quanh dòng crash (±30 dòng).
-    2. Xác định chính xác range [start_line, end_line] của đoạn cần sửa trong file GỐC.
-    3. Sinh nội dung `new_lines` thay thế cho range đó — giữ nguyên indentation Python.
-    4. Dùng tool `run_linter` kiểm tra cú pháp đoạn code mới. Nếu lỗi syntax, tự điều chỉnh new_lines.
-    5. Trả về DirectFix với danh sách `hunks` (KHÔNG trả về toàn bộ nội dung file).
+    1. DÙNG `read_file`: Duyệt lần lượt các file trong `stack_trace` (truyền start_line, end_line) để đọc mã nguồn.
+    2. PHÂN TÍCH: Xác định chính xác file và các dòng code liên quan trực tiếp đến nguyên nhân gốc rễ (Root Cause).
+    3. LẬP PLAN hoặc DIRECT FIX: 
+       - Nếu Phức tạp: Trả về `PlanWrapper` với danh sách `PlanStep` chi tiết (step_id, title, target_file, target_lines, description, acceptance_criteria). Chỉ định rõ `target_lines` để Coder Agent tiết kiệm context.
+       - Nếu Đơn giản: Trả về `DirectFix` với `fix_description` chỉ định rõ Coder cần làm gì ở file nào.
 
-    QUY TẮC CHUNK-BASED:
-    ✓ start_line và end_line là số dòng trong file GỐC (1-indexed, inclusive).
-    ✓ Giữ nguyên indentation Python y hệt các dòng xung quanh.
-    ✓ Nếu thêm dòng mới (insert): start_line = end_line = dòng tham chiếu.
-    ✓ Nếu xóa cả đoạn: new_lines = "" (chuỗi rỗng).
-    ✗ KHÔNG trả về toàn bộ nội dung file trong new_content.
+    QUY TẮC QUAN TRỌNG:
+    - BẠN LÀ KIẾN TRÚC SƯ, KHÔNG PHẢI THỢ XÂY. KHÔNG TRẢ VỀ MÃ NGUỒN CỤ THỂ HOẶC DIFF.
+    - `fix_description` hoặc `description` trong PlanStep chỉ hướng dẫn "Cần sửa gì, sửa như thế nào", không viết code thay Coder.
 """)
 
 

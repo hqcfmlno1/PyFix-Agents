@@ -14,8 +14,7 @@ from graph.config import BOLD, GREEN, RED, RESET
 from graph.helpers import build_project_tree, print_header, print_step
 from graph.models import BugFixState
 
-if TYPE_CHECKING:
-    from graph.nodes.input_analyzer import InputAnalyzerNode
+from graph.nodes.input_analyzer import InputAnalyzerNode
 
 
 @dataclass

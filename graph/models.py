@@ -58,13 +58,19 @@ class PlanStep(BaseModel):
     acceptance_criteria: str = Field(default="", description="Tiêu chí nghiệm thu hoàn thành bước này")
 
 
-# ── Direct Fix (Lỗi đơn giản không cần Plan) ─────────────────────────────────
+# ── Direct Fix (Lỗi đơn giản) ─────────────────────────────────
 class DirectFix(BaseModel):
-    """Sửa lỗi trực tiếp nhanh cho các bug đơn giản — Dùng Chunk-Based Patching."""
-    target_file: str = Field(description="File cần sửa")
-    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa start_line, end_line và new_lines")
-    diff_summary: str = Field(default="", description="Tóm tắt sửa đổi")
-    explanation: str = Field(description="Giải thích nguyên nhân & cách sửa")
+    """Sửa lỗi trực tiếp nhanh cho các bug đơn giản (Output từ Planner Agent)."""
+    bug_summary: str = Field(description="Tóm tắt ngắn gọn về lỗi")
+    root_cause: str = Field(description="Nguyên nhân gốc rễ của lỗi")
+    file_path: str = Field(description="Đường dẫn file cần sửa")
+    error_line: int = Field(description="Số dòng phát sinh lỗi")
+    fix_description: str = Field(description="Hướng dẫn chi tiết cách sửa (để Coder Agent thực thi)")
+
+# ── Plan (Lỗi phức tạp) ───────────────────────────────────────
+class PlanWrapper(BaseModel):
+    """Bao bọc danh sách PlanStep cho Pydantic AI Output."""
+    steps: List[PlanStep] = Field(description="Danh sách các bước thực thi")
 
 
 # ── Patch Hunk (Chunk-Based Patch) ──────────────────────────────────────────

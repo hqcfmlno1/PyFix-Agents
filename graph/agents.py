@@ -4,14 +4,14 @@ Agent Definitions — input_analyzer, planner, coder agents.
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Union
 
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
 
 from graph.config import MCP_SERVER_URL, model
-from graph.models import BugReport, CodeFix, DirectFix, PlanStep
-from graph.prompts import CODER_PROMPT, DIRECT_FIX_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
+from graph.models import BugReport, CodeFix, DirectFix, PlanWrapper
+from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
 
 # ── MCP Toolsets ─────────────────────────────────────────────────────────────
 mcp_toolset = MCPToolset(MCP_SERVER_URL)
@@ -35,19 +35,12 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
     retries=2,
 )
 
-planner_agent: Agent[None, List[PlanStep]] = Agent(
+# ── Lập Kế Hoạch & Suy Luận ──────────────────────────────────────────
+planner_agent: Agent[None, Union[DirectFix, PlanWrapper]] = Agent(
     model,
-    output_type=List[PlanStep],
+    output_type=Union[DirectFix, PlanWrapper],
     system_prompt=PLANNER_PROMPT,
     toolsets=[mcp_toolset_planner],
-    retries=2,
-)
-
-direct_fix_agent: Agent[None, DirectFix] = Agent(
-    model,
-    output_type=DirectFix,
-    system_prompt=DIRECT_FIX_PROMPT,
-    toolsets=[mcp_toolset_coder],
     retries=2,
 )
 
