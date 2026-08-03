@@ -37,8 +37,8 @@ else:
     genai_client = genai.Client(credentials=creds)
     provider = GoogleProvider(client=genai_client)
 
-#MODEL_DISPLAY_NAME = "gemma-4-31b-it"
-MODEL_DISPLAY_NAME = "gemini-2.5-flash"
+MODEL_DISPLAY_NAME = "gemma-4-31b-it"
+#MODEL_DISPLAY_NAME = "gemini-2.5-flash"
 
 model = GoogleModel(MODEL_DISPLAY_NAME, provider=provider)
 
@@ -246,14 +246,19 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
     retries=2,
 )
 
-mcp_toolset = MCPToolset(MCP_SERVER_URL)
-
-
+toolset = MCPToolset(MCP_SERVER_URL)
+mcp_toolset_planner = toolset.filtered(
+    lambda ctx, tool_def: tool_def.name in ['read_file', 'list_directory', 'get_file_context', 'search_in_codebase']
+)
+mcp_toolset_coder = toolset.filtered(
+    lambda ctx, tool_def: tool_def.name in ['read_file', 'list_directory', 'get_file_context', 'search_in_codebase','run_python_syntax_check']
+)
+# không cần tool liên quan đến validate trong mcp server vì bản thân việc validate là deterministic được thực thi bằng subprocess rồi
 planner_agent: Agent[None, PlanOutput] = Agent(
     model,
     output_type=PlanOutput,
     system_prompt=_PLANNER_PROMPT,
-    toolsets=[mcp_toolset],
+    toolsets=[mcp_toolset_planner],
     retries=2,
 )
 
@@ -261,7 +266,7 @@ coder_agent: Agent[None, CodeFix] = Agent(
     model,
     output_type=CodeFix,
     system_prompt=_CODER_PROMPT,
-    toolsets=[mcp_toolset],
+    toolsets=[mcp_toolset_coder],
     retries=2,
 )
 
