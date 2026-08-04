@@ -35,7 +35,11 @@ class StackFrame(BaseModel):
 
 # ── Bug Report (output từ InputAnalyzerNode) ─────────────────────────────────
 class BugReport(BaseModel):
-    """Output có cấu trúc từ Input Analyzer Agent — Phân tích Unhandled Runtime Exception."""
+    """
+    Output có cấu trúc từ Input Analyzer Agent.
+    Chỉ trích xuất dữ liệu kỹ thuật từ traceback — KHÔNG giải thích nguyên nhân
+    (việc đó để Planner Agent làm sau khi đọc code thực tế).
+    """
     bug_types: List[BugType] = Field(description="Danh sách loại lỗi (data_driven_runtime hoặc logic_driven_runtime)")
     error_class: str = Field(default="", description="Tên Exception class cụ thể (VD: KeyError, IndexError, TypeError)")
     error_message: str = Field(default="", description="Thông điệp lỗi chi tiết kèm theo Exception (VD: 'user_id', 'list index out of range')")
@@ -43,7 +47,6 @@ class BugReport(BaseModel):
     target_file: Optional[str] = Field(default=None, description="File crash chính trong dự án")
     error_line: Optional[int] = Field(default=None, description="Dòng code crash chính trong dự án")
     runtime_input_data: Optional[str] = Field(default=None, description="Dữ liệu đầu vào runtime gây crash (nếu có)")
-    explanation: str = Field(default="", description="Giải thích ngắn gọn chẩn đoán bề mặt cho người dùng")
     want_plan: bool = Field(default=False, description="User có muốn xem/duyệt plan trước khi sửa hay không")
 
 
@@ -70,6 +73,7 @@ class DirectFix(BaseModel):
 # ── Plan (Lỗi phức tạp) ───────────────────────────────────────
 class PlanWrapper(BaseModel):
     """Bao bọc danh sách PlanStep cho Pydantic AI Output."""
+    root_cause: str = Field(description="Nguyên nhân gốc rễ của lỗi sau khi đọc code thực tế")
     steps: List[PlanStep] = Field(description="Danh sách các bước thực thi")
 
 
@@ -129,7 +133,7 @@ class BugFixState(BaseModel):
     want_plan: bool = False
     want_apply: bool = False
     missing_fields: List[str] = Field(default_factory=list)
-    bug_explanation: str = ""
+    root_cause_explanation: str = ""  # Được điền bởi PlanningNode sau khi đọc code thực tế
     complexity: BugComplexity = BugComplexity.COMPLEX
 
     # ── Phase 3: DirectFix & Planning ────────────────────────────────────────

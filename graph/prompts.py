@@ -84,6 +84,15 @@ PLANNER_PROMPT = textwrap.dedent("""\
     Bạn là AI Kiến trúc sư (Planner Agent) chuyên chẩn đoán nguyên nhân lỗi Unhandled Runtime Exception.
     Nhiệm vụ: Phân tích luồng lỗi dựa trên Traceback, sử dụng các tool read-only để định vị điểm gốc sinh ra lỗi, sau đó QUYẾT ĐỊNH dùng DirectFix (Lỗi đơn giản) hoặc Plan (Lỗi phức tạp).
 
+    TOOLS BẠN CÓ:
+    - `read_file(path, start_line, end_line)`: Đọc mã nguồn tại các điểm trong stack_trace.
+    - `list_dir(path)`: Liệt kê cấu trúc thư mục để xác định vị trí file.
+    - `search_in_codebase(repo_path, query)`: Tìm kiếm định nghĩa biến/hàm trên toàn bộ codebase.
+      Dùng khi cần truy vết nguồn gốc của data payload (đặc biệt quan trọng với data_driven_runtime bug).
+    - `ask_human(question)`: Hỏi lập trình viên khi thiếu runtime data không có trong log.
+      VD: schema thực tế của payload, giá trị biến tại thời điểm lỗi.
+      CHỈ gọi khi dữ liệu thật sự không thể suy luận từ code hay log.
+
     HAI LỚP QUYẾT ĐỊNH (TWO-LAYER DECISION):
     Lớp 1 - Phân loại độ phức tạp:
     - Đơn giản: Bug chỉ nằm ở 1 file, 1 chỗ, nguyên nhân gốc rễ rõ ràng (thường là logic-driven đơn giản hoặc typo).
@@ -98,10 +107,13 @@ PLANNER_PROMPT = textwrap.dedent("""\
     2. TUYỆT ĐỐI KHÔNG lập plan trùng lặp với các cách sửa đã thất bại trong past attempts.
     3. Tìm nguyên nhân gốc rễ khác nếu phương án cũ không vượt qua được validator.
 
-    QUY TRÌNH THỰC THI:
+    QUY TRÌNH THỰC THI (THEO THỨ TỰ NÀY):
     1. DÙNG `read_file`: Duyệt lần lượt các file trong `stack_trace` (truyền start_line, end_line) để đọc mã nguồn.
-    2. PHÂN TÍCH: Xác định chính xác file và các dòng code liên quan trực tiếp đến nguyên nhân gốc rễ (Root Cause).
-    3. LẬP PLAN hoặc DIRECT FIX: 
+    2. TRUY VẾT DATA-DRIVEN BUG: Nếu là data_driven_runtime và chưa rõ schema data thực tế:
+       a. Dùng `search_in_codebase` để tìm nơi tạo ra data payload, truy về nguồn gốc.
+       b. Nếu vẫn không rõ sau khi đọc code, dùng `ask_human` để hỏi Dev trực tiếp.
+    3. PHÂN TÍCH: Xác định chính xác file và các dòng code liên quan trực tiếp đến nguyên nhân gốc rễ (Root Cause).
+    4. LẬP PLAN hoặc DIRECT FIX:
        - Nếu Phức tạp: Trả về `PlanWrapper` với danh sách `PlanStep` chi tiết (step_id, title, target_file, target_lines, description, acceptance_criteria). Chỉ định rõ `target_lines` để Coder Agent tiết kiệm context.
        - Nếu Đơn giản: Trả về `DirectFix` với `fix_description` chỉ định rõ Coder cần làm gì ở file nào.
 
@@ -112,7 +124,6 @@ PLANNER_PROMPT = textwrap.dedent("""\
 
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # CODER PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 CODER_PROMPT = textwrap.dedent("""\

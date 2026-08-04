@@ -13,7 +13,6 @@ from graph.nodes.project_init import ProjectInitializerNode
 from graph.nodes.input_analyzer import InputAnalyzerNode
 from graph.nodes.input_guardrail import InputGateGuardrailNode
 from graph.nodes.need_more_info import NeedMoreInfoNode
-from graph.nodes.bug_explainer import BugExplainerNode
 from graph.nodes.planning import PlanningNode
 from graph.nodes.plan_interceptor import PlanInterceptorNode
 from graph.nodes.execution import ExecutionNode
@@ -36,7 +35,6 @@ _builder.add(
     _builder.node(InputAnalyzerNode),
     _builder.node(InputGateGuardrailNode),
     _builder.node(NeedMoreInfoNode),
-    _builder.node(BugExplainerNode),
     _builder.node(PlanningNode),
     _builder.node(PlanInterceptorNode),
     _builder.node(ExecutionNode),

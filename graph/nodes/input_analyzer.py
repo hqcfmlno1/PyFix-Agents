@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 class InputAnalyzerNode(BaseNode[BugFixState]):
     """
     [Agent] Nhận log traceback từ user, lọc nhiễu và băm thành stack_trace có cấu trúc.
+    Chỉ trích xuất dữ liệu kỹ thuật — KHÔNG giải thích nguyên nhân.
+    Việc chẩn đoán root cause được để PlanningNode thực hiện sau khi đọc code thực tế.
     """
 
     async def run(self, ctx: GraphRunContext[BugFixState]) -> InputGateGuardrailNode:
@@ -88,8 +90,8 @@ Cấu trúc dự án để đối chiếu đường dẫn file tương đối:
         ctx.state.error_file = bug_report.target_file
         ctx.state.error_line = bug_report.error_line
         ctx.state.runtime_input_data = bug_report.runtime_input_data
-        ctx.state.bug_explanation = bug_report.explanation
         ctx.state.want_plan = bug_report.want_plan
+        # root_cause_explanation không đặt ở đây — sẽ được PlanningNode điền sau khi đọc code thực tế
 
         # Nếu target_file chưa được xác định nhưng stack_trace có phần tử crash_point
         if not ctx.state.target_file and bug_report.stack_trace:

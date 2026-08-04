@@ -2,7 +2,6 @@
 Module chứa tất cả các Node trong pydantic-graph.
 """
 
-from graph.nodes.bug_explainer import BugExplainerNode
 from graph.nodes.execution import ExecutionNode
 from graph.nodes.input_analyzer import InputAnalyzerNode
 from graph.nodes.input_guardrail import InputGateGuardrailNode
@@ -18,7 +17,6 @@ __all__ = [
     "InputAnalyzerNode",
     "InputGateGuardrailNode",
     "NeedMoreInfoNode",
-    "BugExplainerNode",
     "PlanningNode",
     "PlanInterceptorNode",
     "ExecutionNode",
