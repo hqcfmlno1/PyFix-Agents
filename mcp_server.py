@@ -1,10 +1,12 @@
 """
 PyFix MCP Server v2
 Tools:
-  • read_file   — đọc file Python (hỗ trợ đọc theo khoảng dòng) + liệt kê symbols
-  • write_file  — đề xuất ghi code mới (ghi tạm, chờ hệ thống duyệt)
-  • list_dir    — liệt kê cấu trúc thư mục
-  • run_linter  — chạy py_compile kiểm tra cú pháp
+  • read_file            — đọc file Python (hỗ trợ đọc theo khoảng dòng) + liệt kê symbols
+  • write_file           — đề xuất ghi code mới (ghi tạm, chờ hệ thống duyệt)
+  • list_dir             — liệt kê cấu trúc thư mục
+  • run_linter           — chạy py_compile kiểm tra cú pháp
+  • search_in_codebase   — tìm kiếm text/pattern trong toàn bộ codebase
+  • run_command          — thực thi lệnh shell để tái hiện hoặc kiểm tra lỗi
 """
 
 from __future__ import annotations
@@ -274,6 +276,105 @@ def run_linter(path: str) -> dict:
         "file_path": abs_path,
         "error": error_msg,
     }
+
+
+
+# ── TOOL 5: search_in_codebase ──────────────────────────────────────────────
+@server.tool()
+def search_in_codebase(
+    repo_path: str,
+    query: str,
+    file_pattern: str = "*.py",
+    max_results: int = 30,
+) -> list:
+    """
+    Tìm kiếm text/pattern trong toàn bộ codebase (case-insensitive).
+    Hữu ích khi cần tìm nơi định nghĩa hàm, biến, hoặc truy vết
+    luồng data đi qua nhiều file sau khi đã chỉnh sửa.
+
+    Args:
+        repo_path: Đường dẫn đến thư mục gốc của dự án.
+        query: Chuỗi cần tìm kiếm.
+        file_pattern: Pattern file (mặc định '*.py').
+        max_results: Số kết quả tối đa trả về (mặc định 30).
+    """
+    import fnmatch
+
+    repo_path = os.path.abspath(repo_path)
+    results: list[dict] = []
+    skip_dirs = {".git", "__pycache__", ".venv", "venv", "env", "node_modules", ".pytest_cache"}
+    query_lower = query.lower()
+
+    for root, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in files:
+            if fnmatch.fnmatch(fname, file_pattern):
+                fpath = os.path.join(root, fname)
+                if _is_blocked_path(fpath):
+                    continue
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+                        for line_no, line in enumerate(fh, start=1):
+                            if query_lower in line.lower():
+                                results.append({
+                                    "file": os.path.relpath(fpath, repo_path),
+                                    "line_number": line_no,
+                                    "line_content": line.rstrip(),
+                                })
+                                if len(results) >= max_results:
+                                    return results
+                except Exception:
+                    continue
+
+    return results
+
+
+# ── TOOL 6: run_command ─────────────────────────────────────────────────────
+@server.tool()
+def run_command(
+    command: str,
+    cwd: str = ".",
+    timeout: int = 30,
+) -> dict:
+    """
+    Thực thi lệnh shell để tái hiện lỗi gốc hoặc kiểm tra bản fix có hiệu quả không.
+    Coder Agent dùng tool này để xác nhận hành vi thực tế của code trước khi trả về hunks.
+
+    Args:
+        command: Lệnh shell cần thực thi (VD: 'python main.py', 'pytest tests/test_x.py').
+        cwd: Thư mục làm việc (mặc định thư mục hiện tại).
+        timeout: Thời gian chờ tối đa (giây, mặc định 30).
+    """
+    abs_cwd = os.path.abspath(cwd)
+    if not os.path.isdir(abs_cwd):
+        return {"success": False, "error": f"Thư mục không tồn tại: {abs_cwd}"}
+
+    # Danh sách lệnh nguy hiểm bị chặn
+    blocked_prefixes = ("rm ", "del ", "rmdir ", "format ", "mkfs", "dd ", "shutdown", "reboot")
+    cmd_lower = command.strip().lower()
+    if any(cmd_lower.startswith(b) for b in blocked_prefixes):
+        return {"success": False, "error": f"Lệnh bị chặn vì lý do bảo mật: {command}"}
+
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=abs_cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return {
+            "success": True,
+            "returncode": proc.returncode,
+            "stdout": proc.stdout.strip(),
+            "stderr": proc.stderr.strip(),
+            "passed": proc.returncode == 0,
+        }
+    except subprocess.TimeoutExpired:
+        return {"success": False, "error": f"Lệnh chạy quá {timeout}s và bị hủy."}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

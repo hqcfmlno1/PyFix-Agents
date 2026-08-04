@@ -1,5 +1,6 @@
 """
-ExecutionNode — Coder Agent thực thi từng bước trong Plan (Chunk-Based Patching).
+ExecutionNode — Coder Agent thực thi từng bước trong Plan với Per-Step Human Approval.
+Sau mỗi bước: hiện diff → hỏi Dev duyệt → Accept thì ghi file, Reject thì retry step đó.
 """
 
 from __future__ import annotations
@@ -30,27 +31,27 @@ if TYPE_CHECKING:
 @dataclass
 class ExecutionNode(BaseNode[BugFixState]):
     """
-    [Agent] Thực thi từng bước trong Plan dùng Chunk-Based Patching.
-    Coder Agent chỉ đọc khoảng dòng liên quan và trả về List[PatchHunk].
-    apply_hunks() tự áp hunk vào file gốc không cần LLM đọc lại toàn bộ file.
+    [Agent] Thực thi từng bước trong Plan theo cơ chế Per-Step Human Approval.
+
+    Luồng tại mỗi step:
+    1. Coder Agent đọc file và tạo hunks.
+    2. Áp dụng hunks tạm vào bộ nhớ (current_contents).
+    3. Hiển thị diff của step đó cho Dev.
+    4. Hỏi Dev: [y] Accept → ghi file thật / [n] Reject (kèm lý do) → Coder retry step / [q] Thoát.
+    5. Nếu step bị reject > step_max_retries lần → trigger replan.
     """
 
-    async def run(self, ctx: GraphRunContext[BugFixState]) -> ValidationNode:
+    async def run(self, ctx: GraphRunContext[BugFixState]) -> "ValidationNode":
         from graph.nodes.validation import ValidationNode
 
-        print_step("🛠", "Coder Agent", f"Đang thực thi từng bước trong Plan (Chunk-Based) với {MODEL_NAME}...")
+        print_step("🛠", "Coder Agent", f"Bắt đầu thực thi từng bước trong Plan với {MODEL_NAME}...")
 
         if ctx.state.validation_errors:
             for err in ctx.state.validation_errors:
                 ctx.state.execution_logs.append(f"[Validation Failed] {err}")
         ctx.state.validation_errors = []
 
-        prev_errors_str = ""
-        if ctx.state.execution_logs:
-            last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
-            prev_errors_str = f"\nLỖI THỬ LẠI TỪ LẦN TRƯỚC:\n{last_errors}\nHãy điều chỉnh code để vượt qua lỗi này."
-
-        # Wrap DirectFix into a 1-step Plan
+        # Wrap DirectFix thành 1-step Plan
         plan_steps = ctx.state.current_plan
         if not plan_steps and ctx.state.direct_fix:
             plan_steps = [
@@ -80,14 +81,16 @@ class ExecutionNode(BaseNode[BugFixState]):
             if abs_path not in original_backups:
                 original_backups[abs_path] = load_file_content(abs_path)
 
-        # current_contents theo dõi nội dung hiện tại (sau từng hunk áp dụng)
+        # current_contents theo dõi nội dung hiện tại (tích lũy qua từng step)
         current_contents: dict[str, str] = dict(original_backups)
-        touched_files: set[str] = set()
-        aggregated_explanations: List[str] = []
+        # Theo dõi các file đã được Dev chấp thuận ghi thật
+        committed_files: set[str] = set()
+
+        total_steps = len(plan_steps)
 
         for idx, step in enumerate(plan_steps, start=1):
             target_lines_str = f" (dòng {step.target_lines})" if step.target_lines else ""
-            print_step("📌", f"Bước {idx}/{len(plan_steps)}", f"{step.title} ({step.target_file}{target_lines_str})")
+            print_step("📌", f"Bước {idx}/{total_steps}", f"{step.title} ({step.target_file}{target_lines_str})")
 
             acc_criteria_str = f"\n- Tiêu chí nghiệm thu: {step.acceptance_criteria}" if step.acceptance_criteria else ""
 
@@ -101,126 +104,160 @@ class ExecutionNode(BaseNode[BugFixState]):
             else:
                 line_read_instruction = f"1. Dùng tool `read_file(path='{step.target_file}')` đọc nội dung file."
 
-            step_prompt = f"""THỰC THI BƯỚC {idx}/{len(plan_steps)} CỦA PLAN (CHUNK-BASED PATCHING):
+            step_retry = 0
+            step_accepted = False
+
+            while not step_accepted:
+                # Xây dựng prompt cho Coder Agent
+                prev_step_errors = ""
+                if ctx.state.execution_logs:
+                    last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
+                    prev_step_errors = f"\nLỖI TỪ LẦN THỬ TRƯỚC:\n{last_errors}\nHãy điều chỉnh để vượt qua lỗi này."
+
+                step_prompt = f"""THỰC THI BƯỚC {idx}/{total_steps} CỦA PLAN (CHUNK-BASED PATCHING):
 - Tiêu đề       : {step.title}
 - File cần sửa   : {step.target_file}
 - Các dòng bị lỗi: {step.target_lines if step.target_lines else 'Không chỉ định'}
 - Hướng dẫn sửa  : {step.description}{acc_criteria_str}
-{prev_errors_str}
+{prev_step_errors}
 
 HƯỚNG DẪN THỰC THI:
 {line_read_instruction}
 2. Thực hiện chính xác các chỉnh sửa theo hướng dẫn trong 'Hướng dẫn sửa' ở trên.
 3. Xác định chính xác start_line và end_line của từng đoạn cần thay đổi trong file GỐC.
-4. Dùng `run_linter` để kiểm tra cú pháp đoạn code mới. Nếu có lỗi syntax, điều chỉnh new_lines cho hợp lệ.
-5. Trả về 'files' chứa 1 SingleFileFix với danh sách 'hunks' (KHÔNG trả về toàn bộ nội dung file).
+4. Dùng `run_linter` để kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh new_lines cho hợp lệ.
+5. Nếu cần truy vết định nghĩa hàm/biến ở file khác, dùng `search_in_codebase`.
+6. Trả về 'files' chứa 1 SingleFileFix với danh sách 'hunks' (KHÔNG trả về toàn bộ nội dung file).
 """
 
-            try:
-                result = await coder_agent.run(step_prompt)
-                step_fix: CodeFix = result.output
+                try:
+                    result = await coder_agent.run(step_prompt)
+                    step_fix: CodeFix = result.output
 
+                    # Áp dụng hunks vào current_contents (chưa ghi file thật)
+                    step_patched_files: dict[str, str] = {}
+                    for ffix in step_fix.files:
+                        abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
+                        if abs_p not in original_backups:
+                            original_backups[abs_p] = load_file_content(abs_p)
+                            current_contents[abs_p] = original_backups[abs_p]
+
+                        if ffix.hunks:
+                            patched = apply_hunks(current_contents[abs_p], ffix.hunks)
+                            step_patched_files[abs_p] = patched
+                        else:
+                            print_step("⚠", f"Bước {idx}", f"Không có hunk nào cho {ffix.target_file}")
+
+                    if not step_patched_files:
+                        print_step("⚠", f"Bước {idx}", "Coder không trả về thay đổi nào.")
+                        step_retry += 1
+                        ctx.state.execution_logs.append(f"Bước {idx}: Coder không tạo được hunks hợp lệ.")
+                        if step_retry > ctx.state.step_max_retries:
+                            print_step("❌", f"Bước {idx}", f"{RED}Vượt quá {ctx.state.step_max_retries} lần retry. Trigger replan.{RESET}")
+                            self._rollback(original_backups, committed_files)
+                            ctx.state.user_plan_feedback = (
+                                f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần thử: Coder không tạo được hunks hợp lệ."
+                            )
+                            ctx.state.replan_count += 1
+                            return ValidationNode()
+                        continue  # Retry step
+
+                except Exception as exc:
+                    print_step("❌", "Coder Agent", f"{RED}Lỗi khi thực thi Bước {idx}: {exc}{RESET}")
+                    step_retry += 1
+                    ctx.state.execution_logs.append(f"Bước {idx} lỗi API/timeout: {exc}")
+                    if step_retry > ctx.state.step_max_retries:
+                        self._rollback(original_backups, committed_files)
+                        ctx.state.user_plan_feedback = f"Bước {idx} thất bại sau {step_retry} lần thử: {exc}"
+                        ctx.state.replan_count += 1
+                        return ValidationNode()
+                    continue  # Retry step
+
+                # ── Hiển thị diff của riêng bước này ────────────────────────
+                print(f"\n{'─'*60}")
+                print(f"  {BOLD}Diff Bước {idx}/{total_steps}: {CYAN}{step.title}{RESET}")
                 if step_fix.explanation:
-                    aggregated_explanations.append(f"Bước {idx}: {step_fix.explanation}")
+                    print(f"  Giải thích: {step_fix.explanation}")
+                for abs_p, patched_content in step_patched_files.items():
+                    rel_p = os.path.relpath(abs_p, ctx.state.repo_path)
+                    base_content = current_contents.get(abs_p, "")
+                    print(f"\n{'─'*40} DIFF: {CYAN}{rel_p}{RESET} {'─'*40}\n")
+                    diff_lines = compute_diff(base_content, patched_content, os.path.basename(abs_p))
+                    print_diff(diff_lines)
 
-                for ffix in step_fix.files:
-                    abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
+                # ── Per-Step Human Approval ──────────────────────────────────
+                print(f"\n{BOLD}{YELLOW}  ⚠ HUMAN APPROVAL — Bước {idx}/{total_steps}{RESET}")
+                while True:
+                    choice = input(
+                        f"  [{GREEN}y{RESET}] Chấp nhận & Ghi file  "
+                        f"[{RED}n{RESET}] Từ chối (kèm lý do)  "
+                        f"[{YELLOW}q{RESET}] Thoát\n"
+                        f"  Lựa chọn [y/n/q]: "
+                    ).strip().lower()
 
-                    # Đảm bảo có backup
-                    if abs_p not in original_backups:
-                        original_backups[abs_p] = load_file_content(abs_p)
-                        current_contents[abs_p] = original_backups[abs_p]
+                    if choice == "y":
+                        # Ghi file thật vào đĩa
+                        for abs_p, patched_content in step_patched_files.items():
+                            os.makedirs(os.path.dirname(abs_p) or ".", exist_ok=True)
+                            with open(abs_p, "w", encoding="utf-8") as fh:
+                                fh.write(patched_content)
+                            current_contents[abs_p] = patched_content
+                            committed_files.add(abs_p)
+                            rel_p = os.path.relpath(abs_p, ctx.state.repo_path)
+                            print(f"  {GREEN}✅ Ghi thành công: {rel_p}{RESET}")
+                        ctx.state.execution_logs.append(f"Bước {idx}: Dev chấp nhận.")
+                        step_accepted = True
+                        break
 
-                    if ffix.hunks:
-                        # Áp dụng Chunk-Based Patching
-                        patched = apply_hunks(current_contents[abs_p], ffix.hunks)
-                        current_contents[abs_p] = patched
+                    elif choice == "n":
+                        reason = input(f"  Lý do từ chối (để trống = không rõ): ").strip()
+                        if not reason:
+                            reason = "Dev từ chối không kèm lý do."
+                        print(f"  {YELLOW}🔄 Retry Bước {idx} với feedback: {reason}{RESET}")
+                        ctx.state.execution_logs.append(f"Bước {idx} bị reject lần {step_retry + 1}: {reason}")
+                        step_retry += 1
+                        if step_retry > ctx.state.step_max_retries:
+                            print_step("❌", f"Bước {idx}", f"{RED}Vượt quá {ctx.state.step_max_retries} lần reject. Trigger replan.{RESET}")
+                            self._rollback(original_backups, committed_files)
+                            ctx.state.user_plan_feedback = (
+                                f"Dev từ chối Bước {idx} ({step.title}) nhiều lần. Lý do cuối: {reason}"
+                            )
+                            ctx.state.replan_count += 1
+                            return ValidationNode()
+                        break  # Thoát vòng while approval → retry step
 
-                        # Ghi file tạm để chuẩn bị cho Validation
-                        os.makedirs(os.path.dirname(abs_p) or ".", exist_ok=True)
-                        with open(abs_p, "w", encoding="utf-8") as fh:
-                            fh.write(patched)
-                        touched_files.add(abs_p)
-                        print_step("💾", f"Bước {idx}", f"Đã áp {len(ffix.hunks)} hunk(s) vào {ffix.target_file}")
-                    else:
-                        print_step("⚠", f"Bước {idx}", f"Không có hunk nào được trả về cho {ffix.target_file}")
+                    elif choice == "q":
+                        print(f"  {RED}Người dùng thoát khỏi quá trình sửa lỗi.{RESET}")
+                        self._rollback(original_backups, committed_files)
+                        sys.exit(0)
 
-            except Exception as exc:
-                print_step("❌", "Coder Agent", f"{RED}Lỗi khi thực thi Bước {idx}: {exc}{RESET}")
-                self._rollback(original_backups, touched_files)
-                ctx.state.validation_errors.append(f"Lỗi thực thi bước {idx}: {exc}")
-                ctx.state.retry_count += 1
-                return ValidationNode()
-
-        # Tổng hợp CodeFix từ current_contents
+        # ── Tất cả bước đã được chấp nhận ───────────────────────────────────
         final_files: List[SingleFileFix] = []
-        for abs_p in touched_files:
+        for abs_p in committed_files:
             rel_p = os.path.relpath(abs_p, ctx.state.repo_path)
             final_files.append(
                 SingleFileFix(
                     target_file=rel_p,
-                    hunks=[],  # Hunks đã được áp dụng, lưu kết quả cuối
-                    changes_summary="Đã áp dụng chunk-based patch theo kế hoạch",
+                    hunks=[],
+                    changes_summary="Đã áp dụng và được Dev chấp nhận.",
                 )
             )
 
-        code_fix = CodeFix(
+        ctx.state.code_fix = CodeFix(
             files=final_files,
-            explanation="\n".join(aggregated_explanations) if aggregated_explanations else "Hoàn thành các bước trong plan.",
+            explanation=f"Hoàn thành {len(plan_steps)} bước. Dev đã review và chấp nhận từng bước.",
         )
-        ctx.state.code_fix = code_fix
-
-        if not final_files:
-            print_step("⚠", "Coder Agent", "Không có file nào được sửa.")
-            return ValidationNode()
-
-        # Rollback file tạm (khôi phục file gốc) trước khi hỏi Human Approval
-        self._rollback(original_backups, touched_files)
-
-        # Hiển thị diff tổng hợp từ original → patched
-        print(f"\n  {BOLD}💡 Tổng hợp kết quả sửa đổi ({len(touched_files)} file):{RESET}")
-        for abs_p in touched_files:
-            rel_p = os.path.relpath(abs_p, ctx.state.repo_path)
-            orig = original_backups.get(abs_p, "")
-            patched = current_contents.get(abs_p, "")
-            print(f"\n{'─'*40} DIFF: {CYAN}{rel_p}{RESET} {'─'*40}\n")
-            diff_lines = compute_diff(orig, patched, os.path.basename(abs_p))
-            print_diff(diff_lines)
-
-        print(f"\n{BOLD}{YELLOW}⚠ HUMAN APPROVAL — Duyệt để ghi thật vào file{RESET}")
-        while True:
-            choice = input(
-                f"  [{GREEN}y{RESET}] Đồng ý & Ghi file  "
-                f"[{RED}n{RESET}] Bỏ qua & Thử lại  "
-                f"[{YELLOW}q{RESET}] Thoát\n"
-                f"  Lựa chọn [y/n/q]: "
-            ).strip().lower()
-
-            if choice == "y":
-                for abs_p in touched_files:
-                    patched = current_contents.get(abs_p, "")
-                    with open(abs_p, "w", encoding="utf-8") as fh:
-                        fh.write(patched)
-                    print(f"  {GREEN}✅ Đã ghi file thành công: {abs_p}{RESET}")
-                break
-
-            elif choice == "n":
-                print(f"  {YELLOW}🔄 Từ chối thay đổi — Thử lại...{RESET}")
-                ctx.state.execution_logs.append("User từ chối chấp nhận diff.")
-                ctx.state.retry_count += 1
-                break
-
-            elif choice == "q":
-                sys.exit(0)
-
+        print_step("✅", "Coder Agent", f"{GREEN}Hoàn tất tất cả {len(plan_steps)} bước. Chuyển sang Validation...{RESET}")
         return ValidationNode()
 
     @staticmethod
-    def _rollback(backups: dict[str, str], touched: set[str]) -> None:
-        for abs_p in touched:
+    def _rollback(backups: dict[str, str], committed: set[str]) -> None:
+        """Rollback chỉ các file đã được commit (ghi thật) về bản gốc."""
+        for abs_p in committed:
             if abs_p in backups:
                 try:
                     with open(abs_p, "w", encoding="utf-8") as fh:
                         fh.write(backups[abs_p])
+                    print(f"  ↩ Rollback: {abs_p}")
                 except Exception:
                     pass

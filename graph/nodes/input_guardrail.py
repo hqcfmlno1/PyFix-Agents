@@ -15,8 +15,8 @@ from graph.helpers import print_step
 from graph.models import BugFixState
 
 if TYPE_CHECKING:
-    from graph.nodes.bug_explainer import BugExplainerNode
     from graph.nodes.need_more_info import NeedMoreInfoNode
+    from graph.nodes.planning import PlanningNode
 
 
 @dataclass
@@ -27,9 +27,9 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[NeedMoreInfoNode, BugExplainerNode]:
-        from graph.nodes.bug_explainer import BugExplainerNode
+    ) -> Union[NeedMoreInfoNode, PlanningNode]:
         from graph.nodes.need_more_info import NeedMoreInfoNode
+        from graph.nodes.planning import PlanningNode
 
         missing: List[str] = []
 
@@ -57,5 +57,5 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
                 print(f"   • {field}")
             return NeedMoreInfoNode()
 
-        print_step("✅", "Guardrail", "Thông tin đầu vào hợp lệ.")
-        return BugExplainerNode()
+        print_step("✅", "Guardrail", "Thông tin đầu vào hợp lệ. Chuyển sang Planner...")
+        return PlanningNode()
