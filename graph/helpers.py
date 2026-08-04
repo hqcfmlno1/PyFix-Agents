@@ -72,8 +72,6 @@ def format_plan(plan: List[PlanStep]) -> str:
         lines.append(f"  {BOLD}Bước {step.step_id}: {step.title}{RESET}")
         lines.append(f"    Mô tả   : {step.description}")
         lines.append(f"    File    : {step.target_file}")
-        if step.target_lines:
-            lines.append(f"    Dòng    : {step.target_lines}")
         if step.acceptance_criteria:
             lines.append(f"    Nghiệm thu: {step.acceptance_criteria}")
     return "\n".join(lines)
@@ -124,45 +122,58 @@ def load_file_content(path: str) -> str:
         return ""
 
 
-def apply_hunks(original_content: str, hunks: List[PatchHunk]) -> str:
+def apply_hunk(file_content: str, hunk: PatchHunk) -> tuple[bool, str]:
     """
-    Áp dụng danh sách PatchHunk vào nội dung file gốc (Chunk-Based Patching).
-
-    Thuật toán:
-    1. Tách file gốc thành danh sách dòng.
-    2. Sắp xếp hunks theo start_line GIẢM DẦN — áp từ dưới lên trên để tránh lệch offset.
-    3. Thay thế lines[start_line-1 : end_line] bằng new_lines.splitlines().
-    4. Join lại thành chuỗi đầy đủ và trả về.
-
-    Args:
-        original_content: Nội dung gốc của file.
-        hunks: Danh sách PatchHunk cần áp dụng.
+    Áp dụng một PatchHunk vào nội dung file bằng cơ chế Search-and-Replace.
 
     Returns:
-        Nội dung mới sau khi áp dụng tất cả hunks.
+        (True, new_content)  nếu thành công.
+        (False, error_msg)   nếu thất bại:
+            - NOT_FOUND   : old_lines không tồn tại trong file.
+            - AMBIGUOUS   : old_lines xuất hiện nhiều lần (thiếu context).
+    """
+    occurrences = file_content.count(hunk.old_lines)
+
+    if occurrences == 0:
+        return False, (
+            f"NOT_FOUND: old_lines không khớp với nội dung file hiện tại.\n"
+            f"  old_lines gửi lên:\n{hunk.old_lines!r}"
+        )
+
+    if occurrences > 1:
+        return False, (
+            f"AMBIGUOUS: old_lines xuất hiện {occurrences} lần trong file. "
+            f"Cần thêm context để xác định duy nhất vị trí cần sửa."
+        )
+
+    new_content = file_content.replace(hunk.old_lines, hunk.new_lines, 1)
+    return True, new_content
+
+
+def apply_all_hunks(original_content: str, hunks: List[PatchHunk]) -> tuple[bool, str, List[str]]:
+    """
+    Áp dụng tuần tự danh sách PatchHunk vào nội dung file.
+    Mỗi hunk được áp dụng lên kết quả của hunk trước (nội dung đã được cập nhật).
+
+    Returns:
+        (success, final_content_or_partial, errors)
+        - Nếu thành công: (True, nội_dung_sau_patch, [])
+        - Nếu có lỗi   : (False, nội_dung_tại_thời_điểm_lỗi, [danh_sách_lỗi])
     """
     if not hunks:
-        return original_content
+        return True, original_content, []
 
-    lines = original_content.splitlines(keepends=True)
+    current = original_content
+    errors: List[str] = []
 
-    # Thêm newline cho dòng cuối nếu file không kết thúc bằng newline
-    if lines and not lines[-1].endswith("\n"):
-        lines[-1] = lines[-1] + "\n"
+    for i, hunk in enumerate(hunks, start=1):
+        success, result = apply_hunk(current, hunk)
+        if success:
+            current = result
+        else:
+            errors.append(f"Hunk #{i} thất bại: {result}")
+            # Dừng sớm khi gặp lỗi để không áp dụng các hunk phụ thuộc sai lên trên
+            return False, current, errors
 
-    # Sắp xếp GIẢM DẦN theo start_line: áp hunk phía dưới trước, tránh lệch offset
-    sorted_hunks = sorted(hunks, key=lambda h: h.start_line, reverse=True)
+    return True, current, errors
 
-    for hunk in sorted_hunks:
-        # Clamp về phạm vi hợp lệ
-        start = max(1, hunk.start_line)
-        end = min(len(lines), hunk.end_line)
-
-        # Chuẩn hóa new_lines: đảm bảo mỗi dòng có newline kết thúc
-        new_line_list = hunk.new_lines.splitlines()
-        normalized: List[str] = [ln + "\n" for ln in new_line_list]
-
-        # Thay thế slice
-        lines[start - 1 : end] = normalized
-
-    return "".join(lines)

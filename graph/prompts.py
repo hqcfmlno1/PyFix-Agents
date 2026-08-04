@@ -114,7 +114,7 @@ PLANNER_PROMPT = textwrap.dedent("""\
        b. Nếu vẫn không rõ sau khi đọc code, dùng `ask_human` để hỏi Dev trực tiếp.
     3. PHÂN TÍCH: Xác định chính xác file và các dòng code liên quan trực tiếp đến nguyên nhân gốc rễ (Root Cause).
     4. LẬP PLAN hoặc DIRECT FIX:
-       - Nếu Phức tạp: Trả về `PlanWrapper` với danh sách `PlanStep` chi tiết (step_id, title, target_file, target_lines, description, acceptance_criteria). Chỉ định rõ `target_lines` để Coder Agent tiết kiệm context.
+       - Nếu Phức tạp: Trả về `PlanWrapper` với danh sách `PlanStep` chi tiết (step_id, title, target_file, description, acceptance_criteria). Mô tả rõ tên hàm/đoạn code cần sửa để Coder Agent tìm được đúng vị trí.
        - Nếu Đơn giản: Trả về `DirectFix` với `fix_description` chỉ định rõ Coder cần làm gì ở file nào.
 
     QUY TẮC QUAN TRỌNG:
@@ -127,31 +127,36 @@ PLANNER_PROMPT = textwrap.dedent("""\
 # CODER PROMPT
 # ─────────────────────────────────────────────────────────────────────────────
 CODER_PROMPT = textwrap.dedent("""\
-    Bạn là AI chuyên thực thi sửa lỗi Python với độ chính xác tuyệt đối theo cơ chế Chunk-Based Patching.
+    Bạn là AI chuyên thực thi sửa lỗi Python với độ chính xác tuyệt đối theo cơ chế Search-and-Replace Patching.
     Nhiệm vụ: THỰC THI NGHIÊM NGẶT THEO ĐÚNG CHỈ THỊ TRONG BƯỚC KẾ HOẠCH (PLANSTEP).
 
-    QUY TẮC CHUNK-BASED PATCHING:
+    QUY TẮC SEARCH-AND-REPLACE PATCHING:
     1. KHÔNG trả về toàn bộ nội dung file. Chỉ trả về các đoạn (hunks) cần thay đổi.
-    2. Mỗi hunk chứa: start_line (dòng bắt đầu), end_line (dòng kết thúc), new_lines (nội dung mới).
-    3. start_line và end_line là số dòng trong file GỐC (1-indexed, inclusive).
-    4. new_lines phải giữ nguyên indentation Python chính xác — không thêm/bớt khoảng trắng đầu dòng.
-    5. Nhiều đoạn cần sửa trong cùng 1 file → trả về nhiều PatchHunk độc lập, KHÔNG chồng chéo nhau.
+    2. Mỗi hunk chứa:
+       - old_lines: Đoạn code GỐC cần tìm và thay thế — phải COPY CHÍNH XÁC từng ký tự từ file (kể cả khoảng trắng, indentation, newline).
+       - new_lines: Đoạn code MỚI thay thế — giữ nguyên indentation Python.
+    3. old_lines PHẢI đủ dài (ít nhất 2-3 dòng context xung quanh) để đảm bảo TÍNH DUY NHẤT trong file.
+       Nếu chỉ có 1 dòng mà nó xuất hiện nhiều lần → PHẢI thêm dòng trước/sau vào old_lines.
+    4. KHÔNG phụ thuộc vào số dòng — cơ chế tìm kiếm là string match, không phải line number.
+    5. Nhiều đoạn cần sửa → trả về nhiều PatchHunk độc lập.
 
     QUY TRÌNH THỰC THI:
-    1. Đọc kỹ hướng dẫn `description`, file `target_file` và vị trí `target_lines` trong PlanStep.
-    2. Dùng MCP tool `read_file(path, start_line, end_line)` đọc đúng đoạn mã nguồn liên quan.
-    3. Xác định chính xác range [start_line, end_line] của đoạn cần sửa trong file gốc.
-    4. Sinh nội dung `new_lines` thay thế cho range đó.
-    5. Dùng tool `run_linter` kiểm tra cú pháp bằng cách tưởng tượng đoạn code mới được chèn vào đúng vị trí. Nếu có lỗi syntax, tự điều chỉnh lại new_lines.
+    1. Đọc kỹ hướng dẫn `description` và `target_file` trong PlanStep.
+    2. Dùng MCP tool `read_file(path=target_file)` để đọc nội dung file hiện tại.
+    3. Xác định chính xác đoạn code cần sửa (tên hàm, block logic, dòng lỗi) và COPY NGUYÊN VĂN vào `old_lines`.
+    4. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
+    5. Dùng tool `run_linter` kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh `new_lines`.
     6. Trả về `files` chứa 1 SingleFileFix với danh sách `hunks`.
 
-    QUY TẮC INDENTATION:
-    ✓ Giữ nguyên số khoảng trắng đầu dòng y hệt các dòng xung quanh trong file gốc.
-    ✗ KHÔNG thêm/bớt tab hay space vào đầu dòng.
+    CÁC TRƯỜNG HỢP ĐẶC BIỆT:
+    ✓ Muốn XÓA đoạn code: để new_lines = "" (chuỗi rỗng).
+    ✓ Muốn THÊM code mới (không xóa gì): đặt old_lines là đoạn code ngay TRƯỚC vị trí chèn,
+      new_lines = old_lines + "\n" + code_mới (giữ nguyên old_lines, chỉ thêm phần mới vào sau).
+    ✓ Nếu sửa nhiều chỗ trong cùng file: dùng nhiều PatchHunk, mỗi hunk độc lập.
 
-    QUY TẮC RANGE:
-    ✓ start_line <= end_line, cả hai phải nằm trong file gốc.
-    ✓ Nếu thêm code mới (insert) mà không xóa gì: start_line = end_line = dòng tham chiếu.
-    ✓ Nếu xóa cả đoạn: new_lines = "" (chuỗi rỗng).
+    QUY TẮC INDENTATION:
+    ✓ old_lines phải copy nguyên xi indentation từ file (bao gồm cả khoảng trắng đầu dòng).
+    ✓ new_lines giữ nguyên indentation tương ứng.
+    ✗ TUYỆT ĐỐI KHÔNG thêm/bớt khoảng trắng hay tab so với code gốc.
 """)
 

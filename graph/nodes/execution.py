@@ -15,7 +15,7 @@ from pydantic_graph import BaseNode, GraphRunContext
 from graph.agents import coder_agent
 from graph.config import BOLD, CYAN, GREEN, MODEL_NAME, RED, RESET, YELLOW
 from graph.helpers import (
-    apply_hunks,
+    apply_all_hunks,
     compute_diff,
     load_file_content,
     print_diff,
@@ -60,7 +60,6 @@ class ExecutionNode(BaseNode[BugFixState]):
                     title=f"DirectFix: {ctx.state.direct_fix.bug_summary}",
                     description=ctx.state.direct_fix.fix_description,
                     target_file=ctx.state.direct_fix.file_path,
-                    target_lines=[ctx.state.direct_fix.error_line],
                     acceptance_criteria="Áp dụng thành công bản vá DirectFix theo hướng dẫn.",
                 )
             ]
@@ -89,20 +88,9 @@ class ExecutionNode(BaseNode[BugFixState]):
         total_steps = len(plan_steps)
 
         for idx, step in enumerate(plan_steps, start=1):
-            target_lines_str = f" (dòng {step.target_lines})" if step.target_lines else ""
-            print_step("📌", f"Bước {idx}/{total_steps}", f"{step.title} ({step.target_file}{target_lines_str})")
+            print_step("📌", f"Bước {idx}/{total_steps}", f"{step.title} ({step.target_file})")
 
             acc_criteria_str = f"\n- Tiêu chí nghiệm thu: {step.acceptance_criteria}" if step.acceptance_criteria else ""
-
-            if step.target_lines:
-                min_line = max(1, min(step.target_lines) - 30)
-                max_line = max(step.target_lines) + 30
-                line_read_instruction = (
-                    f"1. Dùng tool `read_file(path='{step.target_file}', start_line={min_line}, end_line={max_line})` "
-                    f"để chỉ đọc ~60 dòng xung quanh khu vực dòng liên quan {step.target_lines}."
-                )
-            else:
-                line_read_instruction = f"1. Dùng tool `read_file(path='{step.target_file}')` đọc nội dung file."
 
             step_retry = 0
             step_accepted = False
@@ -114,20 +102,26 @@ class ExecutionNode(BaseNode[BugFixState]):
                     last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
                     prev_step_errors = f"\nLỖI TỪ LẦN THỬ TRƯỚC:\n{last_errors}\nHãy điều chỉnh để vượt qua lỗi này."
 
-                step_prompt = f"""THỰC THI BƯỚC {idx}/{total_steps} CỦA PLAN (CHUNK-BASED PATCHING):
+                step_prompt = f"""THỰC THI BƯỚC {idx}/{total_steps} CỦA PLAN (SEARCH-AND-REPLACE PATCHING):
 - Tiêu đề       : {step.title}
 - File cần sửa   : {step.target_file}
-- Các dòng bị lỗi: {step.target_lines if step.target_lines else 'Không chỉ định'}
 - Hướng dẫn sửa  : {step.description}{acc_criteria_str}
 {prev_step_errors}
 
 HƯỚNG DẪN THỰC THI:
-{line_read_instruction}
-2. Thực hiện chính xác các chỉnh sửa theo hướng dẫn trong 'Hướng dẫn sửa' ở trên.
-3. Xác định chính xác start_line và end_line của từng đoạn cần thay đổi trong file GỐC.
-4. Dùng `run_linter` để kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh new_lines cho hợp lệ.
+1. Dùng tool `read_file(path='{step.target_file}')` để đọc nội dung file hiện tại.
+2. Thực hiện chính xác các chỉnh sửa theo 'Hướng dẫn sửa' ở trên.
+3. Với mỗi đoạn cần sửa, xác định:
+   - old_lines: Đoạn code gốc cần thay thế (copy CHÍNH XÁC từng ký tự từ file, bao gồm 2-3 dòng context xung quanh để tạo sự DUY NHẤT).
+   - new_lines: Đoạn code mới thay thế (giữ nguyên indentation).
+4. Dùng `run_linter` kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh new_lines cho hợp lệ.
 5. Nếu cần truy vết định nghĩa hàm/biến ở file khác, dùng `search_in_codebase`.
-6. Trả về 'files' chứa 1 SingleFileFix với danh sách 'hunks' (KHÔNG trả về toàn bộ nội dung file).
+6. Trả về 'files' chứa 1 SingleFileFix với danh sách 'hunks' (mỗi hunk có old_lines và new_lines).
+
+QUY TẮC QUAN TRỌNG:
+- old_lines PHẢI khớp chính xác với nội dung file (kể cả khoảng trắng và indentation).
+- Nếu muốn xóa code, để new_lines là chuỗi rỗng.
+- Nếu muốn thêm code mới (không xóa gì), dùng old_lines là đoạn đứng ngay trước vị trí chèn và new_lines = old_lines + code_mới.
 """
 
                 try:
@@ -136,6 +130,8 @@ HƯỚNG DẪN THỰC THI:
 
                     # Áp dụng hunks vào current_contents (chưa ghi file thật)
                     step_patched_files: dict[str, str] = {}
+                    patch_errors: list[str] = []
+
                     for ffix in step_fix.files:
                         abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
                         if abs_p not in original_backups:
@@ -143,10 +139,30 @@ HƯỚNG DẪN THỰC THI:
                             current_contents[abs_p] = original_backups[abs_p]
 
                         if ffix.hunks:
-                            patched = apply_hunks(current_contents[abs_p], ffix.hunks)
-                            step_patched_files[abs_p] = patched
+                            success, patched, errors = apply_all_hunks(current_contents[abs_p], ffix.hunks)
+                            if success:
+                                step_patched_files[abs_p] = patched
+                            else:
+                                patch_errors.extend(errors)
                         else:
                             print_step("⚠", f"Bước {idx}", f"Không có hunk nào cho {ffix.target_file}")
+
+                    if patch_errors:
+                        error_summary = "\n".join(patch_errors)
+                        print_step("❌", f"Bước {idx}", f"{RED}Patch thất bại:\n{error_summary}{RESET}")
+                        step_retry += 1
+                        ctx.state.execution_logs.append(
+                            f"Bước {idx}: Patch lỗi (lần {step_retry}): {error_summary}"
+                        )
+                        if step_retry > ctx.state.step_max_retries:
+                            print_step("❌", f"Bước {idx}", f"{RED}Vượt quá {ctx.state.step_max_retries} lần retry. Trigger replan.{RESET}")
+                            self._rollback(original_backups, committed_files)
+                            ctx.state.user_plan_feedback = (
+                                f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần: {error_summary}"
+                            )
+                            ctx.state.replan_count += 1
+                            return ValidationNode()
+                        continue  # Retry step
 
                     if not step_patched_files:
                         print_step("⚠", f"Bước {idx}", "Coder không trả về thay đổi nào.")
@@ -157,6 +173,35 @@ HƯỚNG DẪN THỰC THI:
                             self._rollback(original_backups, committed_files)
                             ctx.state.user_plan_feedback = (
                                 f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần thử: Coder không tạo được hunks hợp lệ."
+                            )
+                            ctx.state.replan_count += 1
+                            return ValidationNode()
+                        continue  # Retry step
+
+                    # ── Tự động kiểm tra cú pháp (Linter) ───────────────────────
+                    import ast
+                    syntax_errors: list[str] = []
+                    for abs_p, patched_content in step_patched_files.items():
+                        if abs_p.endswith(".py"):
+                            try:
+                                ast.parse(patched_content, filename=os.path.basename(abs_p))
+                            except SyntaxError as e:
+                                err_text = e.text.strip() if e.text else ""
+                                error_msg = f"Lỗi cú pháp tại {os.path.basename(abs_p)} dòng {e.lineno}: {e.msg}\nCode bị lỗi: {err_text}"
+                                syntax_errors.append(error_msg)
+
+                    if syntax_errors:
+                        error_summary = "\n".join(syntax_errors)
+                        print_step("❌", f"Bước {idx}", f"{RED}Lỗi cú pháp (SyntaxError):\n{error_summary}{RESET}")
+                        step_retry += 1
+                        ctx.state.execution_logs.append(
+                            f"Bước {idx}: Lỗi cú pháp sau patch (lần {step_retry}): {error_summary}"
+                        )
+                        if step_retry > ctx.state.step_max_retries:
+                            print_step("❌", f"Bước {idx}", f"{RED}Vượt quá {ctx.state.step_max_retries} lần retry do lỗi cú pháp. Trigger replan.{RESET}")
+                            self._rollback(original_backups, committed_files)
+                            ctx.state.user_plan_feedback = (
+                                f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần: Liên tục tạo ra lỗi cú pháp."
                             )
                             ctx.state.replan_count += 1
                             return ValidationNode()

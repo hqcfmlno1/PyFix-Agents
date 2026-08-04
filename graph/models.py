@@ -56,7 +56,6 @@ class PlanStep(BaseModel):
     step_id: int = Field(description="Số thứ tự bước (1, 2, 3...)")
     title: str = Field(description="Tiêu đề tóm tắt ngắn gọn bước sửa")
     target_file: str = Field(description="Đường dẫn tương đối của file cần chỉnh sửa")
-    target_lines: List[int] = Field(default_factory=list, description="Danh sách các dòng liên quan cần đọc/sửa trong target_file (VD: [40, 42, 45])")
     description: str = Field(description="Hướng dẫn kỹ thuật chi tiết những đoạn code/hàm cần sửa đổi")
     acceptance_criteria: str = Field(default="", description="Tiêu chí nghiệm thu hoàn thành bước này")
 
@@ -77,20 +76,33 @@ class PlanWrapper(BaseModel):
     steps: List[PlanStep] = Field(description="Danh sách các bước thực thi")
 
 
-# ── Patch Hunk (Chunk-Based Patch) ──────────────────────────────────────────
+# ── Patch Hunk (Search-and-Replace Patch) ────────────────────────────────────
 class PatchHunk(BaseModel):
-    """Một đoạn sửa đổi cụ thể trong file (chunk-based). Chỉ thay thế đúng phần mã nguồn cần sửa."""
-    start_line: int = Field(description="Dòng bắt đầu của đoạn cần thay thế trong file gốc (1-indexed, inclusive)")
-    end_line: int = Field(description="Dòng kết thúc của đoạn cần thay thế trong file gốc (1-indexed, inclusive)")
-    new_lines: str = Field(description="Nội dung mới (một hoặc nhiều dòng) thay thế cho đoạn [start_line, end_line]. Giữ nguyên indentation Python.")
+    """
+    Một đoạn sửa đổi cụ thể trong file theo cơ chế Search-and-Replace.
+    Không phụ thuộc vào số dòng — tránh hoàn toàn vấn đề Line Drift khi áp dụng nhiều bước.
+    """
+    old_lines: str = Field(
+        description=(
+            "Đoạn code gốc cần tìm và thay thế. "
+            "PHẢI khớp chính xác từng ký tự (kể cả khoảng trắng, indentation) với nội dung file hiện tại. "
+            "Nên bao gồm đủ context (2-3 dòng xung quanh) để đảm bảo tính duy nhất trong file."
+        )
+    )
+    new_lines: str = Field(
+        description=(
+            "Nội dung mới thay thế cho old_lines. "
+            "Giữ nguyên indentation Python. Nếu muốn xóa đoạn code, để chuỗi rỗng."
+        )
+    )
     hunk_explanation: str = Field(default="", description="Giải thích ngắn gọn tại sao cần thay đổi đoạn này")
 
 
 # ── Code Fix ─────────────────────────────────────────────────────────────────
 class SingleFileFix(BaseModel):
-    """Chi tiết sửa đổi cho một file cụ thể — Dùng danh sách PatchHunk thay vì toàn bộ nội dung file."""
+    """Chi tiết sửa đổi cho một file cụ thể — Dùng danh sách PatchHunk (search-and-replace) thay vì toàn bộ nội dung file."""
     target_file: str = Field(description="Đường dẫn tương đối của file cần sửa")
-    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa start_line, end_line và new_lines")
+    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa old_lines và new_lines")
     changes_summary: str = Field(description="Tóm tắt tổng quan những thay đổi trong file này")
 
 
