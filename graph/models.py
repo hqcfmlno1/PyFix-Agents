@@ -60,15 +60,6 @@ class PlanStep(BaseModel):
     acceptance_criteria: str = Field(default="", description="Tiêu chí nghiệm thu hoàn thành bước này")
 
 
-# ── Direct Fix (Lỗi đơn giản) ─────────────────────────────────
-class DirectFix(BaseModel):
-    """Sửa lỗi trực tiếp nhanh cho các bug đơn giản (Output từ Planner Agent)."""
-    bug_summary: str = Field(description="Tóm tắt ngắn gọn về lỗi")
-    root_cause: str = Field(description="Nguyên nhân gốc rễ của lỗi")
-    file_path: str = Field(description="Đường dẫn file cần sửa")
-    error_line: int = Field(description="Số dòng phát sinh lỗi")
-    fix_description: str = Field(description="Hướng dẫn chi tiết cách sửa (để Coder Agent thực thi)")
-
 # ── Plan (Lỗi phức tạp) ───────────────────────────────────────
 class PlanWrapper(BaseModel):
     """Bao bọc danh sách PlanStep cho Pydantic AI Output."""
@@ -148,10 +139,7 @@ class BugFixState(BaseModel):
     root_cause_explanation: str = ""  # Được điền bởi PlanningNode sau khi đọc code thực tế
     complexity: BugComplexity = BugComplexity.COMPLEX
 
-    # ── Phase 3: DirectFix & Planning ────────────────────────────────────────
-    direct_fix: Optional[DirectFix] = None
-    direct_fix_fail_count: int = 0
-    max_direct_fix_retries: int = 2
+    # ── Phase 3: Planning ────────────────────────────────────────────────────
 
     current_plan: List[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0

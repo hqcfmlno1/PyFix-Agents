@@ -119,10 +119,18 @@ class ValidationNode(BaseNode[BugFixState]):
 
         if ctx.state.replan_count < ctx.state.max_replan_limit:
             print(f"\n  {RED}❌ Lỗi gốc chưa được khắc phục triệt để.{RESET}")
-            print(f"  {YELLOW}🔄 Quay về Planner để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
+
+            # Nếu đang là SIMPLE mà thất bại → Nâng cấp lên COMPLEX để Planner (Thinking) vào cuộc
+            if ctx.state.complexity == BugComplexity.SIMPLE:
+                ctx.state.complexity = BugComplexity.COMPLEX
+                print(f"  {YELLOW}⬆ Nâng cấp: DirectFix thất bại → Chuyển sang Planner Agent (Thinking) để phân tích sâu...{RESET}")
+            else:
+                print(f"  {YELLOW}🔄 Quay về Planner để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
+
             ctx.state.user_plan_feedback = f"Validation thất bại (Lỗi chưa hết). Chi tiết lỗi: {error_msg}"
             return PlanningNode()
         else:
             print_step("⛔", "Validation", f"{RED}Đã vượt quá {ctx.state.max_replan_limit} lần thử mà chưa sửa được lỗi gốc. Agent chịu thua.{RESET}")
             ctx.state.surrendered = True
             return ReportNode()
+

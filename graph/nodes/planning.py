@@ -1,5 +1,6 @@
 """
-PlanningNode — Planner Agent phân tích Traceback và quyết định sinh ra DirectFix hoặc Plan.
+PlanningNode — Planner Agent (Thinking) phân tích Traceback và sinh ra PlanWrapper cho lỗi phức tạp.
+Chỉ được gọi khi lỗi đã được phân loại là COMPLEX bởi InputGateGuardrailNode.
 """
 
 from __future__ import annotations
@@ -12,10 +13,9 @@ from pydantic_graph import BaseNode, GraphRunContext
 from graph.agents import planner_agent
 from graph.config import BOLD, CYAN, MODEL_NAME, RED, RESET
 from graph.helpers import print_step
-from graph.models import BugComplexity, BugFixState, DirectFix, PlanWrapper
+from graph.models import BugFixState, PlanWrapper
 
 if TYPE_CHECKING:
-    from graph.nodes.execution import ExecutionNode
     from graph.nodes.plan_interceptor import PlanInterceptorNode
     from graph.nodes.validation import ValidationNode
 
@@ -23,32 +23,20 @@ if TYPE_CHECKING:
 @dataclass
 class PlanningNode(BaseNode[BugFixState]):
     """
-    [Agent] Dùng Planner Agent phân tích mã nguồn và quyết định:
-    - Nếu đơn giản: Trả về DirectFix (chỉ thị 1 bước). Chuyển thẳng sang ExecutionNode (Coder thực thi).
-    - Nếu phức tạp: Trả về PlanWrapper (nhiều bước). Chuyển sang PlanInterceptorNode để hỏi ý kiến Dev.
+    [Agent — Thinking Mode via Chain-of-Thought Prompt]
+    Planner đọc file, viết khối <thinking> phân tích sâu,
+    sau đó xuất ra PlanWrapper (nhiều bước) cho Coder Agent thi công.
     """
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[PlanInterceptorNode, ExecutionNode, ValidationNode]:
-        from graph.nodes.execution import ExecutionNode
+    ) -> Union[PlanInterceptorNode, ValidationNode]:
         from graph.nodes.plan_interceptor import PlanInterceptorNode
         from graph.nodes.validation import ValidationNode
 
-        # 1. Chẩn đoán độ phức tạp bằng Code thuần (Deterministic Heuristic)
-        files_in_stack = {frame.file_path for frame in ctx.state.stack_trace if frame.file_path}
-        
-        if ctx.state.want_plan:
-            ctx.state.complexity = BugComplexity.COMPLEX
-        elif len(files_in_stack) > 1:
-            ctx.state.complexity = BugComplexity.COMPLEX
-        else:
-            ctx.state.complexity = BugComplexity.SIMPLE
+        print_step("🧠", "Planner Agent", f"Đang đọc file và phân tích sâu với {MODEL_NAME} (Thinking via CoT)...")
 
-        complexity_str = "PHỨC TẠP (Plan)" if ctx.state.complexity == BugComplexity.COMPLEX else "ĐƠN GIẢN (DirectFix)"
-        print_step("🧠", "Planner Agent", f"Đã phân loại bằng code: {BOLD}{complexity_str}{RESET}. Đang đọc file và chẩn đoán với {MODEL_NAME}...")
-
-        prompt = f"""CHẨN ĐOÁN VÀ QUYẾT ĐỊNH (UNHANDLED RUNTIME EXCEPTION):
+        prompt = f"""CHẨN ĐOÁN LỖI PHỨC TẠP (UNHANDLED RUNTIME EXCEPTION):
 - Ngoại lệ        : {ctx.state.error_class}
 - Thông báo lỗi   : {ctx.state.error_message}
 - Mô tả người dùng: {ctx.state.raw_user_input}
@@ -67,46 +55,24 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
                 prompt += f"- {log}\n"
             prompt += "->HÃY ĐẢM BẢO KHÔNG LẶP LẠI CÁC CÁCH SỬA ĐÃ THẤT BẠI.\n"
 
-        prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Xác định nguyên nhân gốc rễ (root_cause) rõ ràng, sau đó trả về:"
-        if ctx.state.complexity == BugComplexity.SIMPLE:
-            prompt += "\n- Lỗi này ĐÃ ĐƯỢC XÁC ĐỊNH LÀ ĐƠN GIẢN (1 chỗ, 1 file). Bạn BẮT BUỘC trả về mô hình `DirectFix` kèm theo `root_cause`."
-        else:
-            prompt += "\n- Lỗi này ĐÃ ĐƯỢC XÁC ĐỊNH LÀ PHỨC TẠP (hoặc user yêu cầu xem plan). Bạn BẮT BUỘC trả về mô hình `PlanWrapper` kèm theo `root_cause`."
+        prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Viết khối <thinking> phân tích nguyên nhân gốc rễ, sau đó trả về PlanWrapper chi tiết."
 
         try:
             result = await planner_agent.run(prompt)
-            output = result.output
+            output: PlanWrapper = result.output
 
-            if isinstance(output, DirectFix):
-                ctx.state.direct_fix = output
-                ctx.state.current_plan = []  # Đảm bảo plan trống
-                ctx.state.root_cause_explanation = output.root_cause
+            ctx.state.current_plan = output.steps
+            ctx.state.root_cause_explanation = output.root_cause
 
-                print(f"\n{'─'*60}")
-                print_step("⚡", "Planner", f"Quyết định: {CYAN}DirectFix{RESET} (Lỗi đơn giản, 1 chỗ)")
-                print(f"  {BOLD}Tóm tắt lỗi  :{RESET} {output.bug_summary}")
-                print(f"  {BOLD}Nguyên nhân  :{RESET} {RED}{output.root_cause}{RESET}")
-                print(f"  {BOLD}Cách sửa     :{RESET} {output.fix_description}")
-                print(f"  {BOLD}File mục tiêu:{RESET} {CYAN}{output.file_path}:{output.error_line}{RESET}")
-                print(f"{'─'*60}")
-                print(f"  → Tự động tiến hành sửa code...\n")
-                # DirectFix không cần hỏi duyệt, đi thẳng sang Execution (Coder)
-                return ExecutionNode()
-            else:
-                # isinstance(output, PlanWrapper)
-                ctx.state.current_plan = output.steps
-                ctx.state.direct_fix = None
-                ctx.state.root_cause_explanation = output.root_cause
-
-                print(f"\n{'─'*60}")
-                print_step("📜", "Planner", f"Quyết định: {CYAN}Plan{RESET} ({len(output.steps)} bước — Lỗi phức tạp)")
-                print(f"  {BOLD}Nguyên nhân  :{RESET} {RED}{output.root_cause}{RESET}")
-                print(f"{'─'*60}")
-                # Plan cần Human-in-the-loop duyệt
-                return PlanInterceptorNode()
+            print(f"\n{'─'*60}")
+            print_step("📜", "Planner", f"Quyết định: {CYAN}Plan{RESET} ({len(output.steps)} bước — Lỗi phức tạp)")
+            print(f"  {BOLD}Nguyên nhân  :{RESET} {RED}{output.root_cause}{RESET}")
+            print(f"{'─'*60}")
+            # Plan cần Human-in-the-loop duyệt
+            return PlanInterceptorNode()
 
         except Exception as exc:
-            print_step("❌", "Planner Error", f"{RED}Lỗi khi tạo Plan/DirectFix: {exc}{RESET}")
+            print_step("❌", "Planner Error", f"{RED}Lỗi khi tạo Plan: {exc}{RESET}")
             ctx.state.validation_errors.append(f"Planner Error: {exc}")
             ctx.state.retry_count += 1
             return ValidationNode()
