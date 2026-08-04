@@ -1,17 +1,16 @@
-﻿"""
+"""
 Agent Definitions — input_analyzer, planner, coder agents.
 """
 
 from __future__ import annotations
 
-from typing import Union
 
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import Tool
 
 from graph.config import MCP_SERVER_URL, model
-from graph.models import BugReport, CodeFix, DirectFix, PlanWrapper
+from graph.models import BugReport, CodeFix, PlanWrapper
 from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
 
 # ── MCP Toolsets ─────────────────────────────────────────────────────────────
@@ -70,9 +69,9 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
 )
 
 # ── Lập Kế Hoạch & Suy Luận ──────────────────────────────────────────
-planner_agent: Agent[None, Union[DirectFix, PlanWrapper]] = Agent(
+planner_agent: Agent[None, PlanWrapper] = Agent(
     model,
-    output_type=Union[DirectFix, PlanWrapper],
+    output_type=PlanWrapper,
     system_prompt=PLANNER_PROMPT,
     toolsets=[mcp_toolset_planner],
     tools=[ask_human_tool],

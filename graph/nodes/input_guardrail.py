@@ -1,5 +1,7 @@
 """
-InputGateGuardrailNode — Kiểm tra và bổ sung thông tin đầu vào.
+InputGateGuardrailNode — Kiểm tra thông tin đầu vào và phân loại độ phức tạp lỗi.
+- Nếu SIMPLE (1 file): Chuyển thẳng sang ExecutionNode (Coder Agent không thinking).
+- Nếu COMPLEX (nhiều file / user yêu cầu xem plan): Chuyển sang PlanningNode (Thinking).
 """
 
 from __future__ import annotations
@@ -10,11 +12,12 @@ from typing import TYPE_CHECKING, List, Union
 
 from pydantic_graph import BaseNode, GraphRunContext
 
-from graph.config import CYAN, RED, RESET
+from graph.config import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from graph.helpers import print_step
-from graph.models import BugFixState
+from graph.models import BugComplexity, BugFixState
 
 if TYPE_CHECKING:
+    from graph.nodes.execution import ExecutionNode
     from graph.nodes.need_more_info import NeedMoreInfoNode
     from graph.nodes.planning import PlanningNode
 
@@ -22,12 +25,14 @@ if TYPE_CHECKING:
 @dataclass
 class InputGateGuardrailNode(BaseNode[BugFixState]):
     """
-    [Deterministic] Kiểm tra thông tin đầu vào tối thiểu (stack_trace hoặc mô tả lỗi).
+    [Deterministic] Kiểm tra thông tin đầu vào tối thiểu, phân loại độ phức tạp,
+    và định tuyến đến đúng node xử lý tiếp theo.
     """
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[NeedMoreInfoNode, PlanningNode]:
+    ) -> Union[NeedMoreInfoNode, ExecutionNode, PlanningNode]:
+        from graph.nodes.execution import ExecutionNode
         from graph.nodes.need_more_info import NeedMoreInfoNode
         from graph.nodes.planning import PlanningNode
 
@@ -57,5 +62,20 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
                 print(f"   • {field}")
             return NeedMoreInfoNode()
 
-        print_step("✅", "Guardrail", "Thông tin đầu vào hợp lệ. Chuyển sang Planner...")
-        return PlanningNode()
+        # ── Phân loại độ phức tạp (Deterministic Heuristic) ──────────────────
+        files_in_stack = {frame.file_path for frame in ctx.state.stack_trace if frame.file_path}
+
+        if ctx.state.want_plan:
+            ctx.state.complexity = BugComplexity.COMPLEX
+        elif len(files_in_stack) > 1:
+            ctx.state.complexity = BugComplexity.COMPLEX
+        else:
+            ctx.state.complexity = BugComplexity.SIMPLE
+
+        # ── Định tuyến dựa trên độ phức tạp ─────────────────────────────────
+        if ctx.state.complexity == BugComplexity.SIMPLE:
+            print_step("⚡", "Guardrail", f"{GREEN}Lỗi ĐƠN GIẢN (1 file){RESET} — Chuyển thẳng sang {BOLD}Coder Agent{RESET} (không thinking)...")
+            return ExecutionNode()
+        else:
+            print_step("🧠", "Guardrail", f"{YELLOW}Lỗi PHỨC TẠP (nhiều file / yêu cầu plan){RESET} — Chuyển sang {BOLD}Planner Agent{RESET} (thinking)...")
+            return PlanningNode()

@@ -51,27 +51,43 @@ class ExecutionNode(BaseNode[BugFixState]):
                 ctx.state.execution_logs.append(f"[Validation Failed] {err}")
         ctx.state.validation_errors = []
 
-        # Wrap DirectFix thành 1-step Plan
+        # ── Trường hợp SIMPLE: Coder nhận thẳng traceback, không qua Planner ──
         plan_steps = ctx.state.current_plan
-        if not plan_steps and ctx.state.direct_fix:
-            plan_steps = [
-                PlanStep(
-                    step_id=1,
-                    title=f"DirectFix: {ctx.state.direct_fix.bug_summary}",
-                    description=ctx.state.direct_fix.fix_description,
-                    target_file=ctx.state.direct_fix.file_path,
-                    acceptance_criteria="Áp dụng thành công bản vá DirectFix theo hướng dẫn.",
+        if not plan_steps:
+            from graph.models import BugComplexity
+            if ctx.state.complexity == BugComplexity.SIMPLE:
+                # Tạo 1 PlanStep ảo nhưng description chứa traceback đầy đủ để Coder tự suy luận
+                error_context = (
+                    f"Lỗi: {ctx.state.error_class}: {ctx.state.error_message}\n"
+                    f"File crash: {ctx.state.target_file}, dòng {ctx.state.error_line}\n"
+                    f"Mô tả người dùng: {ctx.state.raw_user_input}\n"
                 )
-            ]
-        elif not plan_steps:
-            plan_steps = [
-                PlanStep(
-                    step_id=1,
-                    title="Sửa lỗi dự án",
-                    description="Sửa code theo mô tả lỗi",
-                    target_file=ctx.state.target_file or "main.py",
-                )
-            ]
+                if ctx.state.stack_trace:
+                    error_context += "Call Stack:\n"
+                    for frame in ctx.state.stack_trace:
+                        error_context += f"  - {frame.file_path}:{frame.line_number} in {frame.function_name or 'main'}\n"
+                        if frame.code_snippet:
+                            error_context += f"    Code: {frame.code_snippet}\n"
+                plan_steps = [
+                    PlanStep(
+                        step_id=1,
+                        title=f"DirectFix: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
+                        description=error_context,
+                        target_file=ctx.state.target_file or "main.py",
+                        acceptance_criteria="Lỗi runtime không còn xảy ra sau khi áp dụng bản vá.",
+                    )
+                ]
+                print_step("⚡", "Coder Agent", f"Chế độ {CYAN}DirectFix{RESET}: Nhận traceback trực tiếp, tự phân tích và vá lỗi...")
+            else:
+                plan_steps = [
+                    PlanStep(
+                        step_id=1,
+                        title="Sửa lỗi dự án",
+                        description="Sửa code theo mô tả lỗi",
+                        target_file=ctx.state.target_file or "main.py",
+                    )
+                ]
+
 
         # Backup nội dung gốc của tất cả file trước khi sửa
         original_backups: dict[str, str] = {}
