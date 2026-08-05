@@ -53,37 +53,68 @@ class ExecutionNode(BaseNode[BugFixState]):
 
         # ── Trường hợp SIMPLE: Coder nhận thẳng traceback, không qua Planner ──
         plan_steps = ctx.state.current_plan
+        simple_history = None
+
         if not plan_steps:
-            from graph.models import BugComplexity
+            from graph.models import BugComplexity, BugExplanation
             if ctx.state.complexity == BugComplexity.SIMPLE:
-                # Tạo 1 PlanStep ảo nhưng description chứa traceback đầy đủ để Coder tự suy luận
                 error_context = (
-                    f"Lỗi: {ctx.state.error_class}: {ctx.state.error_message}\n"
-                    f"File crash: {ctx.state.target_file}, dòng {ctx.state.error_line}\n"
-                    f"Mô tả người dùng: {ctx.state.raw_user_input}\n"
+                    f"- Exception: {ctx.state.error_class}: {ctx.state.error_message}\n"
+                    f"- File lỗi: {ctx.state.target_file}:{ctx.state.error_line}\n"
+                    f"- Runtime Data: {ctx.state.raw_user_input}\n\n"
+                    f"THÔNG TIN DỰ ÁN:\n"
+                    f"- Thư mục gốc (repo_path): {ctx.state.repo_path}\n"
+                    f"- Cấu trúc thư mục:\n{ctx.state.project_tree[:1500]}\n\n"
+                    f"CALL STACK:\n"
                 )
                 if ctx.state.stack_trace:
-                    error_context += "Call Stack:\n"
                     for frame in ctx.state.stack_trace:
                         error_context += f"  - {frame.file_path}:{frame.line_number} in {frame.function_name or 'main'}\n"
                         if frame.code_snippet:
                             error_context += f"    Code: {frame.code_snippet}\n"
+
+                print_step("⚡", "Coder Agent", f"Chế độ {CYAN}Chẩn đoán lỗi (Phase 1){RESET}...")
+                diag_prompt = f"LỆNH: CHẨN ĐOÁN LỖI\nThông tin lỗi:\n{error_context}"
+                
+                try:
+                    diag_result = await coder_agent.run(diag_prompt)
+                    if isinstance(diag_result.output, BugExplanation):
+                        print(f"\n{BOLD}Nguyên nhân & Đề xuất sửa:{RESET}")
+                        print(f"{YELLOW}{diag_result.output.explanation}{RESET}\n")
+                    else:
+                        print(f"\n{BOLD}Agent đã trả về kết quả khác (không phải BugExplanation).{RESET}\n")
+                    
+                    simple_history = diag_result.new_messages()
+                except Exception as e:
+                    print(f"Lỗi khi chẩn đoán: {e}")
+                    sys.exit(1)
+
+                print(f"{BOLD}{YELLOW}  ⚠ BẠN CÓ MUỐN TẠO PATCH ĐỂ SỬA LỖI NÀY KHÔNG?{RESET}")
+                choice = input(
+                    f"  [{GREEN}y{RESET}] Có, tiến hành tạo patch  "
+                    f"[{RED}n/q{RESET}] Không, thoát\n"
+                    f"  Lựa chọn [y/n/q]: "
+                ).strip().lower()
+
+                if choice != 'y':
+                    print(f"  {RED}Kết thúc. Không ghi đè thay đổi nào.{RESET}")
+                    sys.exit(0)
+
                 plan_steps = [
                     PlanStep(
                         step_id=1,
-                        title=f"DirectFix: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
-                        description=error_context,
+                        title=f"Sửa lỗi: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
+                        description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về CodeFix chứa các hunks để sửa lỗi này.",
                         target_file=ctx.state.target_file or "main.py",
-                        acceptance_criteria="Lỗi runtime không còn xảy ra sau khi áp dụng bản vá.",
+                        acceptance_criteria="Code chạy được, không còn lỗi runtime.",
                     )
                 ]
-                print_step("⚡", "Coder Agent", f"Chế độ {CYAN}DirectFix{RESET}: Nhận traceback trực tiếp, tự phân tích và vá lỗi...")
             else:
                 plan_steps = [
                     PlanStep(
                         step_id=1,
                         title="Sửa lỗi dự án",
-                        description="Sửa code theo mô tả lỗi",
+                        description="LỆNH: TẠO PATCH. Sửa code theo mô tả lỗi",
                         target_file=ctx.state.target_file or "main.py",
                     )
                 ]
@@ -122,10 +153,15 @@ class ExecutionNode(BaseNode[BugFixState]):
 - Tiêu đề       : {step.title}
 - File cần sửa   : {step.target_file}
 - Hướng dẫn sửa  : {step.description}{acc_criteria_str}
+
+THÔNG TIN DỰ ÁN:
+- Thư mục gốc (repo_path): {ctx.state.repo_path}
+- Cấu trúc thư mục:
+{ctx.state.project_tree[:1500]}
 {prev_step_errors}
 
 HƯỚNG DẪN THỰC THI:
-1. Dùng tool `read_file(path='{step.target_file}')` để đọc nội dung file hiện tại.
+1. Dùng tool `read_file(path='{step.target_file}', start_line=..., end_line=...)` để đọc VÙNG CODE CẦN SỬA. TUYỆT ĐỐI KHÔNG đọc toàn bộ file nếu không cần thiết để tránh hết token.
 2. Thực hiện chính xác các chỉnh sửa theo 'Hướng dẫn sửa' ở trên.
 3. Với mỗi đoạn cần sửa, xác định:
    - old_lines: Đoạn code gốc cần thay thế (copy CHÍNH XÁC từng ký tự từ file, bao gồm 2-3 dòng context xung quanh để tạo sự DUY NHẤT).
@@ -141,8 +177,14 @@ QUY TẮC QUAN TRỌNG:
 """
 
                 try:
-                    result = await coder_agent.run(step_prompt)
-                    step_fix: CodeFix = result.output
+                    if simple_history and idx == 1:
+                        result = await coder_agent.run(step_prompt, message_history=simple_history)
+                    else:
+                        result = await coder_agent.run(step_prompt)
+
+                    step_fix = result.output
+                    if not isinstance(step_fix, CodeFix):
+                        raise ValueError("Agent không trả về CodeFix mà trả về cấu trúc khác.")
 
                     # Áp dụng hunks vào current_contents (chưa ghi file thật)
                     step_patched_files: dict[str, str] = {}

@@ -9,9 +9,21 @@ from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import Tool
 
-from graph.config import MCP_SERVER_URL, model
-from graph.models import BugReport, CodeFix, PlanWrapper
+from graph.config import MCP_SERVER_URL, model, BOLD, CYAN, RESET
+from graph.models import BugExplanation, BugReport, CodeFix, PlanWrapper
 from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
+
+# ── Monkey-patch MCPToolset để in log khi gọi tool ───────────────────────────
+original_call_tool = MCPToolset.call_tool
+
+async def patched_call_tool(self, name: str, arguments: dict, *args, **kwargs):
+    print(f"\n  {BOLD}{CYAN}🛠  AGENT ĐANG GỌI TOOL: {name}{RESET}")
+    if arguments:
+        print(f"  {CYAN}Tham số: {arguments}{RESET}")
+    return await original_call_tool(self, name, arguments, *args, **kwargs)
+
+MCPToolset.call_tool = patched_call_tool
+
 
 # ── MCP Toolsets ─────────────────────────────────────────────────────────────
 mcp_toolset = MCPToolset(MCP_SERVER_URL)
@@ -25,14 +37,12 @@ mcp_toolset_planner = mcp_toolset.filtered(
     ]
 )
 
-# Coder: đọc file, tìm kiếm, linter, chạy lệnh để tái hiện/kiểm tra lỗi
+# Coder: đọc file, tìm kiếm, lấy cấu trúc thư mục
 mcp_toolset_coder = mcp_toolset.filtered(
     lambda ctx, tool_def: tool_def.name in [
         "read_file",
         "list_dir",
         "search_in_codebase",
-        "run_linter",
-        "run_command",
     ]
 )
 
@@ -78,9 +88,11 @@ planner_agent: Agent[None, PlanWrapper] = Agent(
     retries=2,
 )
 
-coder_agent: Agent[None, CodeFix] = Agent(
+from typing import Union
+
+coder_agent: Agent[None, Union[BugExplanation, CodeFix]] = Agent(
     model,
-    output_type=CodeFix,
+    output_type=Union[BugExplanation, CodeFix],
     system_prompt=CODER_PROMPT,
     toolsets=[mcp_toolset_coder],
     retries=2,

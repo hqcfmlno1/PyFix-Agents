@@ -58,8 +58,7 @@ PLAN_TEMPLATES: dict[str, str] = {
         1. Dùng tool `read_file` đọc đúng các dòng liên quan trong `stack_trace` để theo dõi luồng truyền data payload.
         2. Phân tích sự lệch pha giữa schema thực tế của dữ liệu vs giả định trong code.
         3. Sửa code: thêm validation schema, fallback default value bằng `.get()`, hoặc ép kiểu an toàn.
-        4. Dùng tool `run_linter` kiểm tra cú pháp.
-        5. Đảm bảo bản sửa giải quyết triệt để lỗi schema và không ảnh hưởng đến các trường hợp dữ liệu hợp lệ.
+        4. Đảm bảo bản sửa giải quyết triệt để lỗi schema và không ảnh hưởng đến các trường hợp dữ liệu hợp lệ.
     """),
 
     "LOGIC_DRIVEN_RUNTIME": textwrap.dedent("""\
@@ -71,8 +70,7 @@ PLAN_TEMPLATES: dict[str, str] = {
         1. Dùng tool `read_file` đọc hàm và vòng lặp/điều kiện tại crash_point và các caller liên quan trong `stack_trace`.
         2. Phân tích edge-case làm thuật toán bị đổ vỡ (vượt chỉ số, chia 0, mảng rỗng).
         3. Sửa logic điều kiện biên, bổ sung bounds check hoặc xử lý đúng case đặc biệt.
-        4. Dùng tool `run_linter` kiểm tra cú pháp.
-        5. Đảm bảo logic mới xử lý đúng edge-case mà vẫn duy trì tính đúng đắn cho các trường hợp thông thường.
+        4. Đảm bảo logic mới xử lý đúng edge-case mà vẫn duy trì tính đúng đắn cho các trường hợp thông thường.
     """),
 }
 
@@ -126,12 +124,20 @@ PLANNER_PROMPT = textwrap.dedent("""\
 # ─────────────────────────────────────────────────────────────────────────────
 CODER_PROMPT = textwrap.dedent("""\
     Bạn là AI chuyên thực thi sửa lỗi Python với độ chính xác tuyệt đối theo cơ chế Search-and-Replace Patching.
-    Nhiệm vụ: ĐỌC LỆNH VÀ XUẤT HUNKS NGAY LẬP TỨC. KHÔNG GIẢI THÍCH. KHÔNG PHÂN TÍCH DÀI DÒNG.
 
-    NGUYÊN TẮC HOẠT ĐỘNG:
-    - Không cần suy nghĩ làm gì. Bạn chỉ đọc file và xuất PatchHunk.
-    - Không viết explanation dài. Không viết scratchpad. Không giải thích lý do.
-    - Mỗi token bạn xuất phải là dữ liệu hữu ích cho bản vá lỗi.
+    BẠN CÓ 2 CHẾ ĐỘ HOẠT ĐỘNG TÙY THUỘC VÀO LỆNH CỦA NGƯỜI DÙNG:
+
+    === CHẾ ĐỘ 1: CHẨN ĐOÁN LỖI ===
+    Nếu lệnh yêu cầu "CHẨN ĐOÁN LỖI":
+    1. Dùng tool `read_file(path, start_line, end_line)` để đọc mã nguồn tại vị trí gây crash (mỗi lần đọc khoảng 50 dòng, TUYỆT ĐỐI KHÔNG đọc cả file để tránh lãng phí token).
+    2. CẢNH BÁO QUAN TRỌNG: Bạn CÓ THỂ gọi `read_file` nhiều lần để khảo sát các vùng code khác nhau. TUY NHIÊN, TUYỆT ĐỐI KHÔNG gọi lại với CÙNG THAM SỐ. Mỗi lần gọi phải là một khoảng `start_line` và `end_line` MỚI, KHÔNG TRÙNG LẶP (no overlap) với những phần đã đọc.
+    3. Phân tích nguyên nhân gốc rễ một cách ngắn gọn, đi thẳng vào vấn đề.
+    4. Đề xuất hướng sửa lỗi sơ bộ (vd: thêm check None, sửa index, ép kiểu).
+    5. Trả về cấu trúc `BugExplanation` để báo cáo cho người dùng. KHÔNG TRẢ VỀ HUNKS. KHÔNG SINH CODE.
+
+    === CHẾ ĐỘ 2: TẠO PATCH ===
+    Nếu lệnh yêu cầu "TẠO PATCH":
+    Bạn phải ĐỌC LỆNH VÀ XUẤT HUNKS NGAY LẬP TỨC. KHÔNG GIẢI THÍCH DÀI DÒNG.
 
     QUY TẮC SEARCH-AND-REPLACE PATCHING:
     1. KHÔNG trả về toàn bộ nội dung file. Chỉ trả về các đoạn (hunks) cần thay đổi.
@@ -144,11 +150,10 @@ CODER_PROMPT = textwrap.dedent("""\
     5. Nhiều đoạn cần sửa → trả về nhiều PatchHunk độc lập.
 
     QUY TRÌNH THỰC THI (NHANH NHẤT CÓ THỂ):
-    1. Dùng tool `read_file(path=target_file)` để đọc nội dung file hiện tại.
+    1. Dùng tool `read_file(path, start_line, end_line)` để đọc đúng vùng code cần sửa (KHÔNG đọc toàn bộ file).
     2. Xác định chính xác đoạn code cần sửa và COPY NGUYÊN VĂN vào `old_lines`.
     3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
-    4. Dùng tool `run_linter` kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh `new_lines`.
-    5. Trả về `files` chứa 1 SingleFileFix với danh sách `hunks`. NGAY. KHÔNG LÀM GÌ KHÁC.
+    4. Trả về `files` chứa 1 SingleFileFix với danh sách `hunks`. NGAY. KHÔNG LÀM GÌ KHÁC.
 
     CÁC TRƯỜNG HỢP ĐẶC BIỆT:
     ✓ Muốn XÓA đoạn code: để new_lines = "" (chuỗi rỗng).
