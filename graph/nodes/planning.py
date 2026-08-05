@@ -13,7 +13,8 @@ from pydantic_graph import BaseNode, GraphRunContext
 from graph.agents import planner_agent
 from graph.config import BOLD, CYAN, MODEL_NAME, RED, RESET
 from graph.helpers import print_step
-from graph.models import BugFixState, PlanWrapper
+from graph.models import BugFixState, PlanWrapper, BugType
+from graph.prompts import PLAN_TEMPLATES
 
 if TYPE_CHECKING:
     from graph.nodes.plan_interceptor import PlanInterceptorNode
@@ -55,7 +56,15 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
                 prompt += f"- {log}\n"
             prompt += "->HÃY ĐẢM BẢO KHÔNG LẶP LẠI CÁC CÁCH SỬA ĐÃ THẤT BẠI.\n"
 
-        prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Viết khối <thinking> phân tích nguyên nhân gốc rễ, sau đó trả về PlanWrapper chi tiết."
+        # Nhúng Plan Template tương ứng với loại lỗi
+        if ctx.state.bug_types:
+            for btype in ctx.state.bug_types:
+                template = PLAN_TEMPLATES.get(btype.value.upper())
+                if template:
+                    prompt += f"\n{template}\n"
+                    break  # Ưu tiên lấy template của loại lỗi đầu tiên tìm thấy
+
+        prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Viết khối <thinking> phân tích nguyên nhân gốc rễ, sau đó trả về PlanWrapper chi tiết tuân theo KHUNG KẾ HOẠCH ở trên."
 
         try:
             result = await planner_agent.run(prompt)

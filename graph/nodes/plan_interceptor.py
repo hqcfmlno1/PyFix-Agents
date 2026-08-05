@@ -7,6 +7,7 @@ PlanInterceptorNode — Gộp toàn bộ chức năng duyệt Plan:
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Union
 
@@ -73,10 +74,8 @@ class PlanInterceptorNode(BaseNode[BugFixState]):
                 return PlanningNode()
 
             elif cmd_lower in ["quit", "exit", "q", "3"]:
-                print(f"  {CYAN}👋 Dừng lại theo yêu cầu (chỉ xem plan, không chỉnh sửa file).{RESET}\n")
-                ctx.state.want_apply = False
-                ctx.state.validation_passed = True
-                return ReportNode()
+                print(f"  {CYAN}Dừng lại theo yêu cầu (chỉ xem plan, không chỉnh sửa file).{RESET}\n")
+                sys.exit(0)
 
             else:
                 print(f"  {RED}✗ Lựa chọn không hợp lệ. Vui lòng nhập 'proceed', 'replan <lý do>', hoặc 'quit'.{RESET}")

@@ -41,23 +41,31 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
   {YELLOW}Tip:{RESET} Nhập 'quit' để thoát.
 """)
 
-        print(f"{BOLD}Mô tả lỗi / Traceback log:{RESET} ", end="", flush=True)
-        try:
-            first_line = input()
-        except (EOFError, KeyboardInterrupt):
-            sys.exit(0)
-
-        if first_line.strip().lower() == "quit":
-            sys.exit(0)
-
-        lines = [first_line]
-        try:
-            import msvcrt
-            while msvcrt.kbhit():
-                lines.append(input())
-        except Exception:
-            pass
-
+        print(f"{BOLD}Mô tả lỗi / Traceback log (Nhấn Enter 2 lần liên tiếp để kết thúc nhập):{RESET}")
+        
+        lines = []
+        empty_count = 0
+        while True:
+            try:
+                line = input()
+                if line.strip().lower() == "quit" and not lines:
+                    sys.exit(0)
+                
+                if not line.strip():
+                    empty_count += 1
+                    if empty_count >= 2:
+                        break
+                else:
+                    empty_count = 0
+                
+                lines.append(line)
+            except (EOFError, KeyboardInterrupt):
+                if not lines:
+                    sys.exit(0)
+                break
+        
+        print("\n")  # Xuống dòng sau khi paste xong để tách biệt UI
+        
         raw_input = "\n".join(lines).strip()
 
         if ctx.state.missing_fields and ctx.state.raw_user_input:

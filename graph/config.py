@@ -27,7 +27,8 @@ else:
     genai_client = genai.Client(credentials=creds)
     provider = GoogleProvider(client=genai_client)
 
-MODEL_DISPLAY_NAME = "gemma-4-31b-it"
+#MODEL_DISPLAY_NAME = "gemma-4-31b-it"
+MODEL_DISPLAY_NAME = "gemini-3.5-flash"
 model = GoogleModel(MODEL_DISPLAY_NAME, provider=provider)
 MODEL_NAME = MODEL_DISPLAY_NAME
 

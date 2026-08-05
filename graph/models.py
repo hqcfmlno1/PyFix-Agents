@@ -103,6 +103,12 @@ class CodeFix(BaseModel):
     explanation: str = Field(description="Giải thích nguyên nhân gốc rễ và giải pháp")
 
 
+# ── Bug Explanation (Cho lỗi Simple) ─────────────────────────────────────────
+class BugExplanation(BaseModel):
+    """Output chẩn đoán lỗi từ Coder Agent cho Phase 1 của lỗi Simple."""
+    explanation: str = Field(description="Giải thích nguyên nhân gốc rễ gây ra lỗi và cách bạn dự định sửa nó (chỉ text, không code)")
+
+
 # ── Replan History ───────────────────────────────────────────────────────────
 class RePlanHistory(BaseModel):
     """Lưu lịch sử các lần replan."""
