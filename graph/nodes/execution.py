@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, List
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import coder_agent
-from graph.config import BOLD, CYAN, GREEN, MODEL_NAME, RED, RESET, YELLOW
+from graph.config import BOLD, CODER_MODEL_NAME, CYAN, GREEN, RED, RESET, YELLOW
 from graph.helpers import (
     apply_all_hunks,
     compute_diff,
@@ -44,7 +44,7 @@ class ExecutionNode(BaseNode[BugFixState]):
     async def run(self, ctx: GraphRunContext[BugFixState]) -> "ValidationNode":
         from graph.nodes.validation import ValidationNode
 
-        print_step("🛠", "Coder Agent", f"Bắt đầu thực thi từng bước trong Plan với {MODEL_NAME}...")
+        print_step("🛠", "Coder Agent", f"Bắt đầu thực thi từng bước trong Plan với {CODER_MODEL_NAME}...")
 
         if ctx.state.validation_errors:
             for err in ctx.state.validation_errors:
@@ -149,10 +149,11 @@ class ExecutionNode(BaseNode[BugFixState]):
                     last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
                     prev_step_errors = f"\nLỖI TỪ LẦN THỬ TRƯỚC:\n{last_errors}\nHãy điều chỉnh để vượt qua lỗi này."
 
-                step_prompt = f"""THỰC THI BƯỚC {idx}/{total_steps} CỦA PLAN (SEARCH-AND-REPLACE PATCHING):
-- Tiêu đề       : {step.title}
-- File cần sửa   : {step.target_file}
-- Hướng dẫn sửa  : {step.description}{acc_criteria_str}
+                step_prompt = f"""LỆNH: TẠO PATCH (SEARCH-AND-REPLACE)
+
+NHIỆM VỤ: {step.title}
+FILE CẦN SỬA: {step.target_file}
+HƯỚNG DẪN SỬA: {step.description}{acc_criteria_str}
 
 THÔNG TIN DỰ ÁN:
 - Thư mục gốc (repo_path): {ctx.state.repo_path}
@@ -161,14 +162,10 @@ THÔNG TIN DỰ ÁN:
 {prev_step_errors}
 
 HƯỚNG DẪN THỰC THI:
-1. Dùng tool `read_file(path='{step.target_file}', start_line=..., end_line=...)` để đọc VÙNG CODE CẦN SỬA. TUYỆT ĐỐI KHÔNG đọc toàn bộ file nếu không cần thiết để tránh hết token.
-2. Thực hiện chính xác các chỉnh sửa theo 'Hướng dẫn sửa' ở trên.
-3. Với mỗi đoạn cần sửa, xác định:
-   - old_lines: Đoạn code gốc cần thay thế (copy CHÍNH XÁC từng ký tự từ file, bao gồm 2-3 dòng context xung quanh để tạo sự DUY NHẤT).
-   - new_lines: Đoạn code mới thay thế (giữ nguyên indentation).
-4. Dùng `run_linter` kiểm tra cú pháp. Nếu có lỗi syntax, điều chỉnh new_lines cho hợp lệ.
-5. Nếu cần truy vết định nghĩa hàm/biến ở file khác, dùng `search_in_codebase`.
-6. Trả về 'files' chứa 1 SingleFileFix với danh sách 'hunks' (mỗi hunk có old_lines và new_lines).
+1. Dùng tool `read_file(path='{step.target_file}', start_line=..., end_line=...)` để đọc VÙNG CODE CẦN SỬA (khoảng 30-50 dòng quanh vị trí lỗi). KHÔNG đọc toàn bộ file.
+2. Xác định chính xác đoạn code cần sửa, COPY NGUYÊN VĂN vào `old_lines` (bao gồm 2-3 dòng context xung quanh để đảm bảo TÍNH DUY NHẤT).
+3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
+4. BẮT BUỘC trả về CodeFix với `files` chứa ÍT NHẤT 1 SingleFileFix và ÍT NHẤT 1 hunk. TUYỆT ĐỐI KHÔNG trả về files=[] rỗng hoặc hunks=[] rỗng.
 
 QUY TẮC QUAN TRỌNG:
 - old_lines PHẢI khớp chính xác với nội dung file (kể cả khoảng trắng và indentation).
@@ -183,8 +180,27 @@ QUY TẮC QUAN TRỌNG:
                         result = await coder_agent.run(step_prompt)
 
                     step_fix = result.output
+
+                    # ── Debug: Hiển thị output thực tế từ Coder ──────────
                     if not isinstance(step_fix, CodeFix):
-                        raise ValueError("Agent không trả về CodeFix mà trả về cấu trúc khác.")
+                        print_step("🔍", "DEBUG", f"Coder trả về kiểu: {type(step_fix).__name__}")
+                        if hasattr(step_fix, 'explanation'):
+                            print(f"  Explanation: {step_fix.explanation[:200]}")
+                        raise ValueError(f"Agent không trả về CodeFix mà trả về {type(step_fix).__name__}.")
+
+                    # ── Validate: Reject empty files/hunks ──────────────
+                    if not step_fix.files:
+                        raise ValueError(
+                            f"CodeFix có files=[] rỗng (explanation='{step_fix.explanation[:100]}'). "
+                            f"Model không sinh được hunks. Retry..."
+                        )
+
+                    # Debug: kiểm tra nội dung CodeFix
+                    print_step("🔍", "DEBUG", f"CodeFix: {len(step_fix.files)} file(s), explanation='{step_fix.explanation[:100]}...'")
+                    for fi, ffix in enumerate(step_fix.files):
+                        print(f"  File[{fi}]: {ffix.target_file}, {len(ffix.hunks)} hunk(s)")
+                        for hi, h in enumerate(ffix.hunks):
+                            print(f"    Hunk[{hi}]: old_lines={repr(h.old_lines[:80])}..., new_lines={repr(h.new_lines[:80])}...")
 
                     # Áp dụng hunks vào current_contents (chưa ghi file thật)
                     step_patched_files: dict[str, str] = {}

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Union
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import planner_agent
-from graph.config import BOLD, CYAN, MODEL_NAME, RED, RESET
+from graph.config import BOLD, CYAN, PLANNER_MODEL_NAME, RED, RESET
 from graph.helpers import print_step
 from graph.models import BugFixState, PlanWrapper, BugType
 from graph.prompts import PLAN_TEMPLATES
@@ -35,7 +35,7 @@ class PlanningNode(BaseNode[BugFixState]):
         from graph.nodes.plan_interceptor import PlanInterceptorNode
         from graph.nodes.validation import ValidationNode
 
-        print_step("🧠", "Planner Agent", f"Đang đọc file và phân tích sâu với {MODEL_NAME} (Thinking via CoT)...")
+        print_step("🧠", "Planner Agent", f"Đang đọc file và phân tích sâu với {PLANNER_MODEL_NAME} (Thinking via CoT)...")
 
         prompt = f"""CHẨN ĐOÁN LỖI PHỨC TẠP (UNHANDLED RUNTIME EXCEPTION):
 - Ngoại lệ        : {ctx.state.error_class}

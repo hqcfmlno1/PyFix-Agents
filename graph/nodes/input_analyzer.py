@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import input_analyzer_agent
-from graph.config import BOLD, CYAN, MODEL_NAME, RED, RESET, YELLOW
+from graph.config import BOLD, CYAN, ANALYZER_MODEL_NAME, RED, RESET, YELLOW
 from graph.helpers import print_step
 from graph.models import BugFixState, BugReport
 
@@ -74,7 +74,7 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
         else:
             ctx.state.raw_user_input = raw_input
 
-        print_step("🤖", "Input Analyzer Agent", f"Đang phân tích traceback & trích xuất Call Stack với {MODEL_NAME}...")
+        print_step("🤖", "Input Analyzer Agent", f"Đang phân tích traceback & trích xuất Call Stack với {ANALYZER_MODEL_NAME}...")
 
         prompt = f"""Phân tích Traceback log sau, lọc nhiễu thư viện ngoài và trích xuất stack_trace:
 
