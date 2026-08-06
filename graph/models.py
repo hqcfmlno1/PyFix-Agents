@@ -99,7 +99,7 @@ class SingleFileFix(BaseModel):
 
 class CodeFix(BaseModel):
     """Output từ Coder Agent."""
-    files: List[SingleFileFix] = Field(default_factory=list, description="Danh sách các file cần sửa")
+    file: SingleFileFix = Field(description="Chi tiết sửa đổi cho file")
     explanation: str = Field(description="Giải thích nguyên nhân gốc rễ và giải pháp")
 
 
@@ -158,7 +158,8 @@ class BugFixState(BaseModel):
     # ── Phase 4: Execution ──────────────────────────────────────────────────
     step_max_retries: int = 3
     files_context: Dict[str, str] = Field(default_factory=dict)
-    code_fix: Optional[CodeFix] = None
+    final_fixes: List[SingleFileFix] = Field(default_factory=list)
+    final_explanation: str = ""
     execution_logs: List[str] = Field(default_factory=list)
     applied_diffs_history: List[Dict] = Field(default_factory=list)
     action_history: List[str] = Field(default_factory=list)
