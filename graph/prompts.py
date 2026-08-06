@@ -151,7 +151,10 @@ CODER_PROMPT = textwrap.dedent("""\
     5. Nhiều đoạn cần sửa → trả về nhiều PatchHunk độc lập.
 
     QUY TRÌNH THỰC THI (NHANH NHẤT CÓ THỂ):
-    1. Dùng tool `read_file(path, start_line, end_line)` để đọc đúng vùng code cần sửa (KHÔNG đọc toàn bộ file).
+    1. QUYẾT ĐỊNH ĐỌC FILE:
+       - Nhìn vào Cấu trúc thư mục, nếu file cần sửa < 200 lines, dùng tool `read_file(path)` đọc toàn bộ.
+       - Nếu file lớn (> 200 lines) và bạn không biết dòng nào cần sửa, BẮT BUỘC dùng tool `search_in_codebase(query="tên hàm", files=["tên_file.py"])` để tìm số dòng.
+       - Sau khi có số dòng, dùng `read_file(path, start_line, end_line)` để đọc đúng vùng code (khoảng 30-50 dòng xung quanh).
     2. Xác định chính xác đoạn code cần sửa và COPY NGUYÊN VĂN vào `old_lines`.
     3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
     4. Trả về `files` chứa 1 SingleFileFix với danh sách `hunks`. NGAY. KHÔNG LÀM GÌ KHÁC.
