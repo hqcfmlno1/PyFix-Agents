@@ -10,6 +10,7 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import Tool
 
 from graph.config import MCP_SERVER_URL, model, BOLD, CYAN, RESET
+from graph.config import analyzer_model, planner_model, coder_model, ANALYZER_MODEL_NAME, PLANNER_MODEL_NAME, CODER_MODEL_NAME
 from graph.models import BugExplanation, BugReport, CodeFix, PlanWrapper
 from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
 
@@ -72,7 +73,7 @@ ask_human_tool = Tool(_ask_human_sync, name="ask_human")
 
 # ── Agent Definitions ────────────────────────────────────────────────────────
 input_analyzer_agent: Agent[None, BugReport] = Agent(
-    model,
+    analyzer_model,  # Gemma — nhẹ, nhanh
     output_type=BugReport,
     system_prompt=INPUT_ANALYZER_PROMPT,
     retries=2,
@@ -80,7 +81,7 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
 
 # ── Lập Kế Hoạch & Suy Luận ──────────────────────────────────────────
 planner_agent: Agent[None, PlanWrapper] = Agent(
-    model,
+    planner_model,  # DeepSeek-R1 thinking=high
     output_type=PlanWrapper,
     system_prompt=PLANNER_PROMPT,
     toolsets=[mcp_toolset_planner],
@@ -90,8 +91,9 @@ planner_agent: Agent[None, PlanWrapper] = Agent(
 
 from typing import Union
 
+# Coder — DeepSeek-V3 (không thinking): viết code nhanh, xuất JSON chẳt chẽ
 coder_agent: Agent[None, Union[BugExplanation, CodeFix]] = Agent(
-    model,
+    coder_model,
     output_type=Union[BugExplanation, CodeFix],
     system_prompt=CODER_PROMPT,
     toolsets=[mcp_toolset_coder],

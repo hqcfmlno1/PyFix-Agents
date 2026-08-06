@@ -85,9 +85,17 @@ class ValidationNode(BaseNode[BugFixState]):
                 test_passed = False
                 test_err_msg = f"Lỗi khi chạy pytest: {exc}"
 
-        elif ctx.state.target_file and ctx.state.target_file.endswith(".py"):
-            target_path = resolve_target_path(ctx.state.target_file, ctx.state.repo_path)
-            print(f"  {CYAN}🏃 Thực thi script {os.path.basename(target_path)} kiểm tra crash...{RESET}")
+        else:
+            # Tìm entry script thực sự (file gốc mà user đã chạy gây ra lỗi)
+            entry_script = None
+            if ctx.state.stack_trace and ctx.state.stack_trace[0].file_path:
+                entry_script = ctx.state.stack_trace[0].file_path
+            elif ctx.state.target_file and ctx.state.target_file.endswith(".py"):
+                entry_script = ctx.state.target_file
+
+            if entry_script:
+                target_path = resolve_target_path(entry_script, ctx.state.repo_path)
+                print(f"  {CYAN}🏃 Thực thi script {os.path.basename(target_path)} kiểm tra crash...{RESET}")
             try:
                 run_proc = subprocess.run([sys.executable, target_path], capture_output=True, text=True, timeout=15)
                 if run_proc.returncode != 0:

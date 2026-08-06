@@ -108,10 +108,11 @@ PLANNER_PROMPT = textwrap.dedent("""\
     4. TRẢ VỀ JSON `PlanWrapper` chứa danh sách `PlanStep` chi tiết:
        - step_id, title, target_file, description (hướng dẫn rõ tên hàm/đoạn code cần sửa), acceptance_criteria.
 
-    QUY TẮC CHỐNG VÒNG LẶP:
+    QUY TẮC CHỐNG VÒNG LẶP & TẬP TRUNG (FOCUS RULE):
     1. ĐỌC KỸ LỊCH SỬ HÀNH ĐỘNG (action_history) và các bản patch hỏng đã thử.
     2. TUYỆT ĐỐI KHÔNG lập plan trùng lập với các cách sửa đã thất bại.
-    3. Tìm nguyên nhân gốc rễ khác nếu phương án cũ không vượt qua được validator.
+    3. TẬP TRUNG TỐI ĐA: CHỈ giải quyết ĐÚNG lỗi được chỉ định trong Traceback. TUYỆT ĐỐI KHÔNG đọc, phân tích hay cố gắng sửa các file lỗi khác dù bạn vô tình tìm thấy chúng trong quá trình search.
+    4. Trả về Plan ngay lập tức khi đã tìm ra nguyên nhân gốc rễ, KHÔNG gọi quá nhiều tool lặp đi lặp lại.
 
     QUY TẮC QUAN TRỌNG:
     - BẠN LÀ KIẾN TRÚC SƯ, KHÔNG PHẢI THỢ XÂY. KHÔNG TRẢ VỀ MÃ NGUỒN CỤ THỂ HAY DIFF.
