@@ -10,6 +10,19 @@ from typing import List
 
 from graph.config import BOLD, CYAN, GREEN, RED, RESET, YELLOW
 from graph.models import PatchHunk, PlanStep
+from typing import Optional
+
+def _count_lines(filepath: str) -> Optional[int]:
+    """Đếm số dòng của file. Trả về None nếu là file binary hoặc lỗi."""
+    try:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(1024)
+            if b'\x00' in chunk:
+                return None
+            f.seek(0)
+            return sum(1 for _ in f)
+    except Exception:
+        return None
 
 
 def print_header(title: str) -> None:
@@ -56,8 +69,12 @@ def build_project_tree(repo_path: str, max_depth: int = 3) -> str:
                 _, ext = os.path.splitext(entry.name)
                 if ext in show_exts or entry.name in always_show:
                     size = entry.stat().st_size
-                    sz = f" ({size}B)" if size < 10_000 else f" ({size // 1024}KB)"
-                    lines.append(f"{prefix}{conn}📄 {entry.name}{sz}")
+                    size_str = f"{size}B" if size < 10_000 else f"{size // 1024}KB"
+                    
+                    line_count = _count_lines(entry.path)
+                    lines_str = f", {line_count} lines" if line_count is not None else ""
+                    
+                    lines.append(f"{prefix}{conn}📄 {entry.name} ({size_str}{lines_str})")
 
     walk(repo_path)
     return "\n".join(lines)

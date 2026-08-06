@@ -188,6 +188,22 @@ def write_file(
         return {"success": False, "error": str(exc)}
 
 
+# ── HELPER: Đếm số dòng file ──────────────────────────────────────────────────
+def _count_lines(filepath: str) -> Optional[int]:
+    """Đếm số dòng của file. Trả về None nếu là file binary hoặc lỗi."""
+    try:
+        with open(filepath, 'rb') as f:
+            # Đọc chunk nhỏ đầu tiên để đoán xem có phải binary không
+            chunk = f.read(1024)
+            if b'\x00' in chunk:
+                return None
+            
+            f.seek(0)
+            return sum(1 for _ in f)
+    except Exception:
+        return None
+
+
 # ── TOOL 3: list_dir ────────────────────────────────────────────────────────
 @server.tool()
 def list_dir(path: str) -> str:
@@ -233,8 +249,12 @@ def list_dir(path: str) -> str:
                 walk(entry.path, prefix + ext_prefix, depth + 1)
             else:
                 size = entry.stat().st_size
-                size_str = f" ({size}B)" if size < 10_000 else f" ({size // 1024}KB)"
-                lines.append(f"{prefix}{connector}📄 {entry.name}{size_str}")
+                size_str = f"{size}B" if size < 10_000 else f"{size // 1024}KB"
+                
+                line_count = _count_lines(entry.path)
+                lines_str = f", {line_count} lines" if line_count is not None else ""
+                
+                lines.append(f"{prefix}{connector}📄 {entry.name} ({size_str}{lines_str})")
 
     walk(abs_path)
     return "\n".join(lines)
@@ -284,18 +304,17 @@ def run_linter(path: str) -> dict:
 def search_in_codebase(
     repo_path: str,
     query: str,
-    file_pattern: str = "*.py",
+    files: Optional[list[str]] = None,
     max_results: int = 30,
 ) -> list:
     """
-    Tìm kiếm text/pattern trong toàn bộ codebase (case-insensitive).
-    Hữu ích khi cần tìm nơi định nghĩa hàm, biến, hoặc truy vết
-    luồng data đi qua nhiều file sau khi đã chỉnh sửa.
+    Tìm kiếm text/pattern trong toàn bộ codebase hoặc trong các file cụ thể (case-insensitive).
+    Hữu ích khi cần tìm nơi định nghĩa hàm, biến, hoặc tìm số dòng của code.
 
     Args:
         repo_path: Đường dẫn đến thư mục gốc của dự án.
         query: Chuỗi cần tìm kiếm.
-        file_pattern: Pattern file (mặc định '*.py').
+        files: Danh sách các tên file cần tìm kiếm bên trong. Nếu None hoặc rỗng, tìm toàn dự án.
         max_results: Số kết quả tối đa trả về (mặc định 30).
     """
     import fnmatch
@@ -305,26 +324,34 @@ def search_in_codebase(
     skip_dirs = {".git", "__pycache__", ".venv", "venv", "env", "node_modules", ".pytest_cache"}
     query_lower = query.lower()
 
-    for root, dirs, files in os.walk(repo_path):
+    for root, dirs, filenames in os.walk(repo_path):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
-        for fname in files:
-            if fnmatch.fnmatch(fname, file_pattern):
-                fpath = os.path.join(root, fname)
-                if _is_blocked_path(fpath):
+        for fname in filenames:
+            # Nếu có danh sách files, chỉ tìm trong các file đó. Nếu không, mặc định tìm *.py
+            if files:
+                if fname not in files and not any(fname.endswith(f) for f in files):
                     continue
-                try:
-                    with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
-                        for line_no, line in enumerate(fh, start=1):
-                            if query_lower in line.lower():
-                                results.append({
-                                    "file": os.path.relpath(fpath, repo_path),
-                                    "line_number": line_no,
-                                    "line_content": line.rstrip(),
-                                })
-                                if len(results) >= max_results:
-                                    return results
-                except Exception:
+            else:
+                if not fname.endswith(".py"):
                     continue
+
+            fpath = os.path.join(root, fname)
+            if _is_blocked_path(fpath):
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+                    for line_no, line in enumerate(fh, start=1):
+                        if query_lower in line.lower():
+                            results.append({
+                                "file": os.path.relpath(fpath, repo_path),
+                                "line_number": line_no,
+                                "line_content": line.rstrip(),
+                            })
+                            if len(results) >= max_results:
+                                return results
+            except Exception:
+                continue
+
 
     return results
 

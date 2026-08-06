@@ -56,68 +56,59 @@ class ExecutionNode(BaseNode[BugFixState]):
         simple_history = None
 
         if not plan_steps:
-            from graph.models import BugComplexity, BugExplanation
-            if ctx.state.complexity == BugComplexity.SIMPLE:
-                error_context = (
-                    f"- Exception: {ctx.state.error_class}: {ctx.state.error_message}\n"
-                    f"- File lỗi: {ctx.state.target_file}:{ctx.state.error_line}\n"
-                    f"- Runtime Data: {ctx.state.raw_user_input}\n\n"
-                    f"THÔNG TIN DỰ ÁN:\n"
-                    f"- Thư mục gốc (repo_path): {ctx.state.repo_path}\n"
-                    f"- Cấu trúc thư mục:\n{ctx.state.project_tree[:1500]}\n\n"
-                    f"CALL STACK:\n"
-                )
-                if ctx.state.stack_trace:
-                    for frame in ctx.state.stack_trace:
-                        error_context += f"  - {frame.file_path}:{frame.line_number} in {frame.function_name or 'main'}\n"
-                        if frame.code_snippet:
-                            error_context += f"    Code: {frame.code_snippet}\n"
+            from graph.models import BugExplanation
+            error_context = (
+                f"- Exception: {ctx.state.error_class}: {ctx.state.error_message}\n"
+                f"- File lỗi: {ctx.state.target_file}:{ctx.state.error_line}\n"
+                f"- Runtime Data: {ctx.state.raw_user_input}\n\n"
+                f"THÔNG TIN DỰ ÁN:\n"
+                f"- Thư mục gốc (repo_path): {ctx.state.repo_path}\n"
+                f"- Cấu trúc thư mục:\n{ctx.state.project_tree[:1500]}\n\n"
+                f"CALL STACK:\n"
+            )
+            if ctx.state.stack_trace:
+                for frame in ctx.state.stack_trace:
+                    error_context += f"  - {frame.file_path}:{frame.line_number} in {frame.function_name or 'main'}\n"
+                    if frame.code_snippet:
+                        error_context += f"    Code: {frame.code_snippet}\n"
 
-                print_step("⚡", "Coder Agent", f"Chế độ {CYAN}Chẩn đoán lỗi (Phase 1){RESET}...")
-                diag_prompt = f"LỆNH: CHẨN ĐOÁN LỖI\nThông tin lỗi:\n{error_context}"
+            print_step("⚡", "Coder Agent", f"Chế độ {CYAN}Chẩn đoán lỗi (Phase 1){RESET}...")
+            diag_prompt = f"LỆNH: CHẨN ĐOÁN LỖI\nThông tin lỗi:\n{error_context}"
+            
+            try:
+                diag_result = await coder_agent.run(diag_prompt)
+                if isinstance(diag_result.output, BugExplanation):
+                    print(f"\n{BOLD}Nguyên nhân & Đề xuất sửa:{RESET}")
+                    print(f"{YELLOW}{diag_result.output.explanation}{RESET}\n")
+                else:
+                    print(f"\n{BOLD}Agent đã trả về kết quả khác (không phải BugExplanation).{RESET}\n")
                 
-                try:
-                    diag_result = await coder_agent.run(diag_prompt)
-                    if isinstance(diag_result.output, BugExplanation):
-                        print(f"\n{BOLD}Nguyên nhân & Đề xuất sửa:{RESET}")
-                        print(f"{YELLOW}{diag_result.output.explanation}{RESET}\n")
-                    else:
-                        print(f"\n{BOLD}Agent đã trả về kết quả khác (không phải BugExplanation).{RESET}\n")
-                    
-                    simple_history = diag_result.new_messages()
-                except Exception as e:
-                    print(f"Lỗi khi chẩn đoán: {e}")
-                    sys.exit(1)
+                simple_history = diag_result.new_messages()
+            except Exception as e:
+                print(f"Lỗi khi chẩn đoán: {e}")
+                sys.exit(1)
 
-                print(f"{BOLD}{YELLOW}  ⚠ BẠN CÓ MUỐN TẠO PATCH ĐỂ SỬA LỖI NÀY KHÔNG?{RESET}")
-                choice = input(
-                    f"  [{GREEN}y{RESET}] Có, tiến hành tạo patch  "
-                    f"[{RED}n/q{RESET}] Không, thoát\n"
-                    f"  Lựa chọn [y/n/q]: "
-                ).strip().lower()
+            print(f"{BOLD}{YELLOW}  ⚠ BẠN CÓ MUỐN TẠO PATCH ĐỂ SỬA LỖI NÀY KHÔNG?{RESET}")
+            choice = input(
+                f"  [{GREEN}y{RESET}] Có, tiến hành tạo patch  "
+                f"[{RED}n/q{RESET}] Không, thoát\n"
+                f"  Lựa chọn [y/n/q]: "
+            ).strip().lower()
 
-                if choice != 'y':
-                    print(f"  {RED}Kết thúc. Không ghi đè thay đổi nào.{RESET}")
-                    sys.exit(0)
+            if choice != 'y':
+                print(f"  {RED}Kết thúc. Không ghi đè thay đổi nào.{RESET}")
+                sys.exit(0)
 
-                plan_steps = [
-                    PlanStep(
-                        step_id=1,
-                        title=f"Sửa lỗi: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
-                        description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về CodeFix chứa các hunks để sửa lỗi này.",
-                        target_file=ctx.state.target_file or "main.py",
-                        acceptance_criteria="Code chạy được, không còn lỗi runtime.",
-                    )
-                ]
-            else:
-                plan_steps = [
-                    PlanStep(
-                        step_id=1,
-                        title="Sửa lỗi dự án",
-                        description="LỆNH: TẠO PATCH. Sửa code theo mô tả lỗi",
-                        target_file=ctx.state.target_file or "main.py",
-                    )
-                ]
+            plan_steps = [
+                PlanStep(
+                    step_id=1,
+                    title=f"Sửa lỗi: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
+                    description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về CodeFix chứa các hunks để sửa lỗi này.",
+                    target_file=ctx.state.target_file or "main.py",
+                    acceptance_criteria="Code chạy được, không còn lỗi runtime.",
+                )
+            ]
+
 
 
         # Backup nội dung gốc của tất cả file trước khi sửa
@@ -162,7 +153,9 @@ THÔNG TIN DỰ ÁN:
 {prev_step_errors}
 
 HƯỚNG DẪN THỰC THI:
-1. Dùng tool `read_file(path='{step.target_file}', start_line=..., end_line=...)` để đọc VÙNG CODE CẦN SỬA (khoảng 30-50 dòng quanh vị trí lỗi). KHÔNG đọc toàn bộ file.
+1. QUYẾT ĐỊNH ĐỌC FILE:
+   - Nhìn vào Cấu trúc thư mục (thấy số lines), nếu file < 200 lines, hãy dùng tool `read_file(path='{step.target_file}')` đọc toàn bộ.
+   - Nếu file > 200 lines và chưa rõ dòng cần sửa, BẮT BUỘC dùng `search_in_codebase(query="...", files=["{step.target_file}"])` để tìm số dòng. Sau đó mới dùng `read_file(start_line=..., end_line=...)` đọc vùng code đó.
 2. Xác định chính xác đoạn code cần sửa, COPY NGUYÊN VĂN vào `old_lines` (bao gồm 2-3 dòng context xung quanh để đảm bảo TÍNH DUY NHẤT).
 3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
 4. BẮT BUỘC trả về CodeFix với `file` chứa ÍT NHẤT 1 hunk. TUYỆT ĐỐI KHÔNG trả về hunks=[] rỗng.
