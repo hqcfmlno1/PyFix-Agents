@@ -47,11 +47,11 @@ class ReportNode(BaseNode[BugFixState]):
             f"  🔄 Số lần Replan : {ctx.state.replan_count}/{ctx.state.max_replan_limit}",
         ]
 
-        if ctx.state.code_fix and ctx.state.code_fix.files and ctx.state.want_apply:
-            lines.append(f"\n  📄 Các file đã được chỉnh sửa ({len(ctx.state.code_fix.files)} file):")
-            for ffix in ctx.state.code_fix.files:
+        if ctx.state.final_fixes and ctx.state.want_apply:
+            lines.append(f"\n  📄 Các file đã được chỉnh sửa ({len(ctx.state.final_fixes)} file):")
+            for ffix in ctx.state.final_fixes:
                 lines.append(f"     • {CYAN}{ffix.target_file}{RESET}")
-            lines.append(f"  💡 Giải thích tổng thể: {ctx.state.code_fix.explanation}")
+            lines.append(f"  💡 Giải thích tổng thể: {ctx.state.final_explanation}")
         elif not ctx.state.want_apply:
             lines.append(f"\n  💡 Chế độ: {YELLOW}Chỉ tư vấn / xem kế hoạch (không chỉnh sửa file thực tế){RESET}")
 

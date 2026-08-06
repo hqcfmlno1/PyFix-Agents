@@ -165,7 +165,7 @@ HƯỚNG DẪN THỰC THI:
 1. Dùng tool `read_file(path='{step.target_file}', start_line=..., end_line=...)` để đọc VÙNG CODE CẦN SỬA (khoảng 30-50 dòng quanh vị trí lỗi). KHÔNG đọc toàn bộ file.
 2. Xác định chính xác đoạn code cần sửa, COPY NGUYÊN VĂN vào `old_lines` (bao gồm 2-3 dòng context xung quanh để đảm bảo TÍNH DUY NHẤT).
 3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
-4. BẮT BUỘC trả về CodeFix với `files` chứa ÍT NHẤT 1 SingleFileFix và ÍT NHẤT 1 hunk. TUYỆT ĐỐI KHÔNG trả về files=[] rỗng hoặc hunks=[] rỗng.
+4. BẮT BUỘC trả về CodeFix với `file` chứa ÍT NHẤT 1 hunk. TUYỆT ĐỐI KHÔNG trả về hunks=[] rỗng.
 
 QUY TẮC QUAN TRỌNG:
 - old_lines PHẢI khớp chính xác với nội dung file (kể cả khoảng trắng và indentation).
@@ -189,37 +189,36 @@ QUY TẮC QUAN TRỌNG:
                         raise ValueError(f"Agent không trả về CodeFix mà trả về {type(step_fix).__name__}.")
 
                     # ── Validate: Reject empty files/hunks ──────────────
-                    if not step_fix.files:
+                    if not step_fix.file.hunks:
                         raise ValueError(
-                            f"CodeFix có files=[] rỗng (explanation='{step_fix.explanation[:100]}'). "
+                            f"CodeFix có hunks=[] rỗng (explanation='{step_fix.explanation[:100]}'). "
                             f"Model không sinh được hunks. Retry..."
                         )
 
                     # Debug: kiểm tra nội dung CodeFix
-                    print_step("🔍", "DEBUG", f"CodeFix: {len(step_fix.files)} file(s), explanation='{step_fix.explanation[:100]}...'")
-                    for fi, ffix in enumerate(step_fix.files):
-                        print(f"  File[{fi}]: {ffix.target_file}, {len(ffix.hunks)} hunk(s)")
-                        for hi, h in enumerate(ffix.hunks):
-                            print(f"    Hunk[{hi}]: old_lines={repr(h.old_lines[:80])}..., new_lines={repr(h.new_lines[:80])}...")
+                    print_step("🔍", "DEBUG", f"CodeFix: file {step_fix.file.target_file}, explanation='{step_fix.explanation[:100]}...'")
+                    print(f"  File: {step_fix.file.target_file}, {len(step_fix.file.hunks)} hunk(s)")
+                    for hi, h in enumerate(step_fix.file.hunks):
+                        print(f"    Hunk[{hi}]: old_lines={repr(h.old_lines[:80])}..., new_lines={repr(h.new_lines[:80])}...")
 
                     # Áp dụng hunks vào current_contents (chưa ghi file thật)
                     step_patched_files: dict[str, str] = {}
                     patch_errors: list[str] = []
 
-                    for ffix in step_fix.files:
-                        abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
-                        if abs_p not in original_backups:
-                            original_backups[abs_p] = load_file_content(abs_p)
-                            current_contents[abs_p] = original_backups[abs_p]
+                    ffix = step_fix.file
+                    abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
+                    if abs_p not in original_backups:
+                        original_backups[abs_p] = load_file_content(abs_p)
+                        current_contents[abs_p] = original_backups[abs_p]
 
-                        if ffix.hunks:
-                            success, patched, errors = apply_all_hunks(current_contents[abs_p], ffix.hunks)
-                            if success:
-                                step_patched_files[abs_p] = patched
-                            else:
-                                patch_errors.extend(errors)
+                    if ffix.hunks:
+                        success, patched, errors = apply_all_hunks(current_contents[abs_p], ffix.hunks)
+                        if success:
+                            step_patched_files[abs_p] = patched
                         else:
-                            print_step("⚠", f"Bước {idx}", f"Không có hunk nào cho {ffix.target_file}")
+                            patch_errors.extend(errors)
+                    else:
+                        print_step("⚠", f"Bước {idx}", f"Không có hunk nào cho {ffix.target_file}")
 
                     if patch_errors:
                         error_summary = "\n".join(patch_errors)
@@ -362,10 +361,8 @@ QUY TẮC QUAN TRỌNG:
                 )
             )
 
-        ctx.state.code_fix = CodeFix(
-            files=final_files,
-            explanation=f"Hoàn thành {len(plan_steps)} bước. Dev đã review và chấp nhận từng bước.",
-        )
+        ctx.state.final_fixes = final_files
+        ctx.state.final_explanation = f"Hoàn thành {len(plan_steps)} bước. Dev đã review và chấp nhận từng bước."
         print_step("✅", "Coder Agent", f"{GREEN}Hoàn tất tất cả {len(plan_steps)} bước. Chuyển sang Validation...{RESET}")
         return ValidationNode()
 

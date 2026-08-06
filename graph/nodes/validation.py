@@ -37,11 +37,11 @@ class ValidationNode(BaseNode[BugFixState]):
 
         print_step("🔍", "Validation Node", "1/2. Kiểm tra cú pháp mã nguồn (py_compile)...")
 
-        if not ctx.state.code_fix or not ctx.state.code_fix.files:
-            print_step("⚠️", "Validation", "Không tìm thấy thông tin code_fix để validate.")
+        if not ctx.state.final_fixes:
+            print_step("⚠️", "Validation", "Không tìm thấy thông tin final_fixes để validate.")
             return self._handle_failure(ctx, "Không có file sửa đổi để kiểm thử.")
 
-        for ffix in ctx.state.code_fix.files:
+        for ffix in ctx.state.final_fixes:
             target_path = resolve_target_path(ffix.target_file, ctx.state.repo_path)
             if not os.path.exists(target_path):
                 continue
