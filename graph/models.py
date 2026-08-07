@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from graph.config import MAX_REPLAN, MAX_RETRY
 
 
 # ── Bug Type & Complexity ───────────────────────────────────────────────────
@@ -57,7 +58,6 @@ class PlanStep(BaseModel):
     title: str = Field(description="Tiêu đề tóm tắt ngắn gọn bước sửa")
     target_file: str = Field(description="Đường dẫn tương đối của file cần chỉnh sửa")
     description: str = Field(description="Hướng dẫn kỹ thuật chi tiết những đoạn code/hàm cần sửa đổi")
-    acceptance_criteria: str = Field(default="", description="Tiêu chí nghiệm thu hoàn thành bước này")
 
 
 # ── Plan (Lỗi phức tạp) ───────────────────────────────────────
@@ -151,12 +151,12 @@ class BugFixState(BaseModel):
     current_step_index: int = 0
     plan_approved: bool = False
     replan_count: int = 0
-    max_replan_limit: int = 3
+    max_replan_limit: int = MAX_REPLAN
     user_plan_feedback: Optional[str] = None
     plan_history: List[RePlanHistory] = Field(default_factory=list)
 
     # ── Phase 4: Execution ──────────────────────────────────────────────────
-    step_max_retries: int = 3
+    step_max_retries: int = MAX_RETRY
     files_context: Dict[str, str] = Field(default_factory=dict)
     final_fixes: List[SingleFileFix] = Field(default_factory=list)
     final_explanation: str = ""

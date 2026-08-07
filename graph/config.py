@@ -48,15 +48,17 @@ ANALYZER_MODEL_NAME = "gemma-4-31b-it"
 analyzer_model = GoogleModel(ANALYZER_MODEL_NAME, provider=google_provider)
 
 # Planner: DeepSeek-R1 với Thinking Mode — phân tích sâu, tìm root cause
-PLANNER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+#PLANNER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+PLANNER_MODEL_NAME = "google/gemma-4-31B-it"
 planner_model = OpenAIChatModel(
     PLANNER_MODEL_NAME,
     provider=deepseek_provider,
     settings=ModelSettings(thinking="high"),
 )
 
-# Coder: DeepSeek-V3 không thinking — viết code nhanh, tuân thủ JSON chặt chẽ
-CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+
+#CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+CODER_MODEL_NAME = "google/gemma-4-31B-it"
 coder_model = OpenAIChatModel(CODER_MODEL_NAME, provider=deepseek_provider)
 
 # Backward compat — một số nơi vẫn import `model` và `MODEL_NAME` chung

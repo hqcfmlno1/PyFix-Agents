@@ -89,8 +89,6 @@ def format_plan(plan: List[PlanStep]) -> str:
         lines.append(f"  {BOLD}Bước {step.step_id}: {step.title}{RESET}")
         lines.append(f"    Mô tả   : {step.description}")
         lines.append(f"    File    : {step.target_file}")
-        if step.acceptance_criteria:
-            lines.append(f"    Nghiệm thu: {step.acceptance_criteria}")
     return "\n".join(lines)
 
 
