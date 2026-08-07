@@ -105,7 +105,6 @@ class ExecutionNode(BaseNode[BugFixState]):
                     title=f"Sửa lỗi: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
                     description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về CodeFix chứa các hunks để sửa lỗi này.",
                     target_file=ctx.state.target_file or "main.py",
-                    acceptance_criteria="Code chạy được, không còn lỗi runtime.",
                 )
             ]
 
@@ -128,8 +127,6 @@ class ExecutionNode(BaseNode[BugFixState]):
         for idx, step in enumerate(plan_steps, start=1):
             print_step("📌", f"Bước {idx}/{total_steps}", f"{step.title} ({step.target_file})")
 
-            acc_criteria_str = f"\n- Tiêu chí nghiệm thu: {step.acceptance_criteria}" if step.acceptance_criteria else ""
-
             step_retry = 0
             step_accepted = False
 
@@ -144,7 +141,7 @@ class ExecutionNode(BaseNode[BugFixState]):
 
 NHIỆM VỤ: {step.title}
 FILE CẦN SỬA: {step.target_file}
-HƯỚNG DẪN SỬA: {step.description}{acc_criteria_str}
+HƯỚNG DẪN SỬA: {step.description}
 
 THÔNG TIN DỰ ÁN:
 - Thư mục gốc (repo_path): {ctx.state.repo_path}

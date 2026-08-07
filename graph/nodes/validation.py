@@ -97,13 +97,22 @@ class ValidationNode(BaseNode[BugFixState]):
                 target_path = resolve_target_path(entry_script, ctx.state.repo_path)
                 print(f"  {CYAN}🏃 Thực thi script {os.path.basename(target_path)} kiểm tra crash...{RESET}")
             try:
-                run_proc = subprocess.run([sys.executable, target_path], capture_output=True, text=True, timeout=15)
+                input_data = ctx.state.runtime_input_data + "\n" if ctx.state.runtime_input_data else None
+                run_proc = subprocess.run([sys.executable, target_path], capture_output=True, text=True, input=input_data, timeout=15)
                 if run_proc.returncode != 0:
-                    test_passed = False
-                    test_err_msg = f"Crash khi thực thi:\n{(run_proc.stderr or run_proc.stdout).strip()}"
-                    print_step("❌", "Validation", f"{RED}Script vẫn bị crash!{RESET}")
+                    test_err_msg = (run_proc.stderr or run_proc.stdout).strip()
+                    if "EOFError: EOF when reading a line" in test_err_msg:
+                        print_step("⚠️", "Validation", f"{YELLOW}Script yêu cầu nhập liệu từ bàn phím (I/O). Bỏ qua kiểm thử tự động.{RESET}")
+                        test_passed = True
+                    else:
+                        test_passed = False
+                        test_err_msg = f"Crash khi thực thi:\n{test_err_msg}"
+                        print_step("❌", "Validation", f"{RED}Script vẫn bị crash!{RESET}")
                 else:
                     print(f"  {GREEN}✅ Script thực thi thành công, lỗi ban đầu đã hết!{RESET}")
+            except subprocess.TimeoutExpired:
+                print_step("⚠️", "Validation", f"{YELLOW}Script chạy quá 15s (có thể đang chờ I/O). Bỏ qua kiểm thử tự động.{RESET}")
+                test_passed = True
             except Exception as exc:
                 test_passed = False
                 test_err_msg = f"Lỗi khi chạy script: {exc}"

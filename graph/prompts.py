@@ -106,7 +106,7 @@ PLANNER_PROMPT = textwrap.dedent("""\
        b. Nếu vẫn không rõ, dùng `ask_human` hỏi Dev trực tiếp.
     3. VIẾT KHỐI `<thinking>` (BẮT BUỘC) — phân tích toàn diện như mô tả ở trên.
     4. TRẢ VỀ JSON `PlanWrapper` chứa danh sách `PlanStep` chi tiết:
-       - step_id, title, target_file, description (hướng dẫn rõ tên hàm/đoạn code cần sửa), acceptance_criteria.
+       - step_id, title, target_file, description (hướng dẫn rõ tên hàm/đoạn code cần sửa).
 
     QUY TẮC CHỐNG VÒNG LẶP & TẬP TRUNG (FOCUS RULE):
     1. ĐỌC KỸ LỊCH SỬ HÀNH ĐỘNG (action_history) và các bản patch hỏng đã thử.

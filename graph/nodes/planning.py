@@ -50,11 +50,19 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
             if frame.code_snippet:
                 prompt += f"  Code: {frame.code_snippet}\n"
 
-        if ctx.state.execution_logs:
-            prompt += "\nLỊCH SỬ THỬ NGHIỆM THẤT BẠI TRƯỚC ĐÓ (Action History):\n"
-            for log in ctx.state.execution_logs:
-                prompt += f"- {log}\n"
-            prompt += "->HÃY ĐẢM BẢO KHÔNG LẶP LẠI CÁC CÁCH SỬA ĐÃ THẤT BẠI.\n"
+        if ctx.state.action_history or ctx.state.user_plan_feedback:
+            prompt += "\nLỊCH SỬ THỬ NGHIỆM VÀ PHẢN HỒI (RẤT QUAN TRỌNG):\n"
+            if ctx.state.current_plan:
+                prompt += "Các bước sửa lỗi (Plan) mà bạn đã thử nghiệm ở lần trước:\n"
+                for step in ctx.state.current_plan:
+                    prompt += f"  - Bước {step.step_id}: {step.title} (File: {step.target_file})\n"
+            if ctx.state.action_history:
+                prompt += "Lịch sử các lần crash/lỗi:\n"
+                for log in ctx.state.action_history:
+                    prompt += f"  - {log}\n"
+            if ctx.state.user_plan_feedback:
+                prompt += f"Lý do thất bại / Phản hồi yêu cầu Replan lần này:\n  -> {ctx.state.user_plan_feedback}\n"
+            prompt += "-> HÃY PHÂN TÍCH LÝ DO TẠI SAO CÁCH SỬA TRÊN LẠI THẤT BẠI VÀ TÌM HƯỚNG TIẾP CẬN MỚI. KHÔNG LẶP LẠI PLAN CŨ.\n"
 
         # Nhúng Plan Template tương ứng với loại lỗi
         if ctx.state.bug_types:
