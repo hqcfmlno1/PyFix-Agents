@@ -65,5 +65,42 @@ class ReportNode(BaseNode[BugFixState]):
         print(report)
         print()
 
+        # Ghi log metrics
+        import json
+        import os
+        from datetime import datetime
+
+        metrics = {
+            "timestamp": datetime.now().isoformat(),
+            "repo_path": ctx.state.repo_path,
+            "status": "success" if passed else ("surrendered" if surrendered else "incomplete"),
+            "replan_count": ctx.state.replan_count,
+            "analyzer": {
+                "calls": ctx.state.metrics_analyzer_calls,
+                "tokens": ctx.state.metrics_analyzer_tokens
+            },
+            "planner": {
+                "calls": ctx.state.metrics_planner_calls,
+                "tokens": ctx.state.metrics_planner_tokens
+            },
+            "coder": {
+                "calls": ctx.state.metrics_coder_calls,
+                "tokens": ctx.state.metrics_coder_tokens
+            }
+        }
+
+        metrics_file = os.path.join(ctx.state.repo_path, "pyfix_metrics.json")
+        try:
+            if os.path.exists(metrics_file):
+                with open(metrics_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            else:
+                data = []
+            data.append(metrics)
+            with open(metrics_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"  {RED}⚠ Lỗi khi ghi file metrics: {e}{RESET}")
+
         return End(report)
 

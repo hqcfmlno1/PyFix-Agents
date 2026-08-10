@@ -21,6 +21,7 @@ from graph.models import BugComplexity, BugFixState
 if TYPE_CHECKING:
     from graph.nodes.planning import PlanningNode
     from graph.nodes.report import ReportNode
+    from graph.nodes.input_analyzer import InputAnalyzerNode
 
 
 @dataclass
@@ -31,9 +32,10 @@ class ValidationNode(BaseNode[BugFixState]):
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[PlanningNode, ReportNode]:
+    ) -> Union[PlanningNode, ReportNode, InputAnalyzerNode]:
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
+        from graph.nodes.input_analyzer import InputAnalyzerNode
 
         print_step("🔍", "Validation Node", "1/2. Kiểm tra cú pháp mã nguồn (py_compile)...")
 
@@ -54,75 +56,25 @@ class ValidationNode(BaseNode[BugFixState]):
 
         print_step("✅", "Validation", f"{GREEN}Cú pháp mã nguồn hợp lệ!{RESET}")
 
-        print_step("🧪", "Validation Node", "2/2. Chạy runtime / test suite kiểm tra xem lỗi đã hết hẳn chưa...")
+        # ── Lưu vào Causal Chain Context (IterationHistory)
+        patch_summary = ""
+        target_files = []
+        for ffix in ctx.state.final_fixes:
+            target_files.append(ffix.target_file)
+            patch_summary += f"{ffix.target_file}: {ffix.changes_summary}\n"
+        
+        from graph.models import IterationContext
+        ctx.state.iteration_history.append(
+            IterationContext(
+                initial_error=ctx.state.error_message or ctx.state.error_class or "Unknown Error",
+                target_files=target_files,
+                patch_summary=patch_summary.strip(),
+                user_feedback="" # Sẽ được điền ở InputAnalyzerNode
+            )
+        )
 
-        test_files = []
-        for root, dirs, files in os.walk(ctx.state.repo_path):
-            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", ".venv", "venv", "node_modules"}]
-            for f in files:
-                if (f.startswith("test_") or f.endswith("_test.py")) and f.endswith(".py"):
-                    test_files.append(os.path.join(root, f))
-
-        test_passed = True
-        test_err_msg = ""
-
-        if test_files:
-            print(f"  {CYAN}🏃 Phát hiện {len(test_files)} file test. Đang chạy pytest...{RESET}")
-            try:
-                test_proc = subprocess.run(
-                    [sys.executable, "-m", "pytest", ctx.state.repo_path, "-v"],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if test_proc.returncode != 0:
-                    test_passed = False
-                    test_err_msg = f"Pytest thất bại:\n{(test_proc.stdout or test_proc.stderr).strip()}"
-                    print_step("❌", "Validation", f"{RED}Unit test không đạt!{RESET}")
-                else:
-                    print(f"  {GREEN}✅ Tất cả unit tests ĐẠT!{RESET}")
-            except Exception as exc:
-                test_passed = False
-                test_err_msg = f"Lỗi khi chạy pytest: {exc}"
-
-        else:
-            # Tìm entry script thực sự (file gốc mà user đã chạy gây ra lỗi)
-            entry_script = None
-            if ctx.state.stack_trace and ctx.state.stack_trace[0].file_path:
-                entry_script = ctx.state.stack_trace[0].file_path
-            elif ctx.state.target_file and ctx.state.target_file.endswith(".py"):
-                entry_script = ctx.state.target_file
-
-            if entry_script:
-                target_path = resolve_target_path(entry_script, ctx.state.repo_path)
-                print(f"  {CYAN}🏃 Thực thi script {os.path.basename(target_path)} kiểm tra crash...{RESET}")
-            try:
-                input_data = ctx.state.runtime_input_data + "\n" if ctx.state.runtime_input_data else None
-                run_proc = subprocess.run([sys.executable, target_path], capture_output=True, text=True, input=input_data, timeout=15)
-                if run_proc.returncode != 0:
-                    test_err_msg = (run_proc.stderr or run_proc.stdout).strip()
-                    if "EOFError: EOF when reading a line" in test_err_msg:
-                        print_step("⚠️", "Validation", f"{YELLOW}Script yêu cầu nhập liệu từ bàn phím (I/O). Bỏ qua kiểm thử tự động.{RESET}")
-                        test_passed = True
-                    else:
-                        test_passed = False
-                        test_err_msg = f"Crash khi thực thi:\n{test_err_msg}"
-                        print_step("❌", "Validation", f"{RED}Script vẫn bị crash!{RESET}")
-                else:
-                    print(f"  {GREEN}✅ Script thực thi thành công, lỗi ban đầu đã hết!{RESET}")
-            except subprocess.TimeoutExpired:
-                print_step("⚠️", "Validation", f"{YELLOW}Script chạy quá 15s (có thể đang chờ I/O). Bỏ qua kiểm thử tự động.{RESET}")
-                test_passed = True
-            except Exception as exc:
-                test_passed = False
-                test_err_msg = f"Lỗi khi chạy script: {exc}"
-
-        if not test_passed:
-            return self._handle_failure(ctx, test_err_msg)
-
-        print_step("🎉", "Validation", f"{GREEN}XÁC NHẬN: Lỗi gốc đã được khắc phục hoàn toàn!{RESET}")
-        ctx.state.validation_passed = True
-        return ReportNode()
+        # Chuyển quyền quyết định thành công/thất bại cho lập trình viên
+        return InputAnalyzerNode()
 
     def _handle_failure(
         self, ctx: GraphRunContext[BugFixState], error_msg: str
