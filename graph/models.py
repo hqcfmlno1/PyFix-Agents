@@ -24,6 +24,13 @@ class BugComplexity(str, Enum):
     COMPLEX = "complex"   # Lỗi phức tạp nhiều frame / multi-file, cần Plan nhiều bước
 
 
+class UserSentiment(str, Enum):
+    """Phản hồi của người dùng về bản vá."""
+    INITIAL = "initial"
+    HAPPY = "happy"
+    UNHAPPY = "unhappy"
+
+
 # ── Stack Frame (Call Stack nội bộ dự án) ──────────────────────────────────
 class StackFrame(BaseModel):
     """Một frame trong Call Stack của dự án (đã lọc bỏ thư viện ngoài / venv / stdlib)."""
@@ -117,6 +124,14 @@ class RePlanHistory(BaseModel):
     rejected_plan_summary: str
 
 
+class IterationContext(BaseModel):
+    """Ngữ cảnh của một vòng lặp sửa lỗi (Causal Chain)."""
+    initial_error: str = Field(description="Lỗi ban đầu ở vòng này")
+    target_files: List[str] = Field(default_factory=list, description="Các file đã sửa")
+    patch_summary: str = Field(description="Tóm tắt nội dung patch")
+    user_feedback: str = Field(default="", description="Phản hồi/lỗi mới từ người dùng")
+
+
 # ── State ────────────────────────────────────────────────────────────────────
 class BugFixState(BaseModel):
     """
@@ -144,6 +159,8 @@ class BugFixState(BaseModel):
     missing_fields: List[str] = Field(default_factory=list)
     root_cause_explanation: str = ""  # Được điền bởi PlanningNode sau khi đọc code thực tế
     complexity: BugComplexity = BugComplexity.COMPLEX
+    user_sentiment: UserSentiment = UserSentiment.INITIAL
+    user_suggested_fix: Optional[str] = None
 
     # ── Phase 3: Planning ────────────────────────────────────────────────────
 
@@ -154,6 +171,7 @@ class BugFixState(BaseModel):
     max_replan_limit: int = MAX_REPLAN
     user_plan_feedback: Optional[str] = None
     plan_history: List[RePlanHistory] = Field(default_factory=list)
+    iteration_history: List[IterationContext] = Field(default_factory=list)
 
     # ── Phase 4: Execution ──────────────────────────────────────────────────
     step_max_retries: int = MAX_RETRY
@@ -172,5 +190,13 @@ class BugFixState(BaseModel):
 
     # ── Phase 6: Report ─────────────────────────────────────────────────────
     final_report: Optional[str] = None
+
+    # ── Phase 7: Metrics ─────────────────────────────────────────────────────
+    metrics_analyzer_tokens: int = 0
+    metrics_analyzer_calls: int = 0
+    metrics_planner_tokens: int = 0
+    metrics_planner_calls: int = 0
+    metrics_coder_tokens: int = 0
+    metrics_coder_calls: int = 0
 
     model_config = {"arbitrary_types_allowed": True}

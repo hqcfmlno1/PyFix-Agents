@@ -6,17 +6,19 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import input_analyzer_agent
 from graph.config import BOLD, CYAN, ANALYZER_MODEL_NAME, RED, RESET, YELLOW
 from graph.helpers import print_step
-from graph.models import BugFixState, BugReport
+from graph.models import BugFixState, BugReport, BugComplexity, UserSentiment
 
 if TYPE_CHECKING:
     from graph.nodes.input_guardrail import InputGateGuardrailNode
+    from graph.nodes.planning import PlanningNode
+    from graph.nodes.report import ReportNode
 
 
 @dataclass
@@ -27,9 +29,57 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
     Việc chẩn đoán root cause được để PlanningNode thực hiện sau khi đọc code thực tế.
     """
 
-    async def run(self, ctx: GraphRunContext[BugFixState]) -> InputGateGuardrailNode:
+    async def run(self, ctx: GraphRunContext[BugFixState]) -> Union[InputGateGuardrailNode, PlanningNode, ReportNode]:
         from graph.nodes.input_guardrail import InputGateGuardrailNode
+        from graph.nodes.planning import PlanningNode
+        from graph.nodes.report import ReportNode
 
+        # ── Dual-Purpose Hub: Kiểm tra xem đây là lần chạy đầu hay vòng lặp phản hồi
+        if ctx.state.iteration_history:
+            print(f"\n{'─'*60}")
+            print_step("🧪", "Human-in-the-Loop", "Vui lòng chạy thử ứng dụng (runtime) và kiểm tra xem lỗi đã được khắc phục chưa.")
+            print(f"""
+  {BOLD}Hướng dẫn phản hồi:{RESET}
+  • {GREEN}Nhập 'ok', 'done', 'yes'{RESET} nếu ứng dụng đã chạy tốt.
+  • {RED}Dán lỗi mới hoặc giải thích lỗi còn tồn đọng{RESET} nếu bản vá chưa triệt để.
+""")
+            print(f"{BOLD}Phản hồi của bạn (Nhấn Enter 2 lần liên tiếp để kết thúc nhập):{RESET}")
+            
+            lines = []
+            empty_count = 0
+            while True:
+                try:
+                    line = input()
+                    if not line.strip():
+                        empty_count += 1
+                        if empty_count >= 2:
+                            break
+                    else:
+                        empty_count = 0
+                    lines.append(line)
+                except (EOFError, KeyboardInterrupt):
+                    break
+            
+            raw_input = "\n".join(lines).strip()
+            
+            # Simple heuristic để xác định HAPPY hay UNHAPPY
+            happy_keywords = ["ok", "done", "yes", "y", "chạy ngon", "passed", "good", "tốt"]
+            if raw_input.lower() in happy_keywords or raw_input.strip() == "":
+                print_step("🎉", "Analyzer", f"{GREEN}Xác nhận bản vá chạy tốt! Kết thúc phiên.{RESET}")
+                ctx.state.user_sentiment = UserSentiment.HAPPY
+                ctx.state.validation_passed = True
+                return ReportNode()
+            else:
+                ctx.state.user_sentiment = UserSentiment.UNHAPPY
+                ctx.state.user_suggested_fix = raw_input
+                ctx.state.complexity = BugComplexity.COMPLEX
+                if ctx.state.iteration_history:
+                    ctx.state.iteration_history[-1].user_feedback = raw_input
+                
+                print_step("🔄", "Analyzer", f"{YELLOW}Lỗi chưa triệt để. Chuyển cấp (Escalation) sang Planner (COMPLEX)...{RESET}")
+                return PlanningNode()
+
+        # ── INITIAL: Phân tích Traceback lần đầu tiên
         print(f"\n{'─'*60}")
         print_step("📝", "Input Analyzer", "Nhập mô tả lỗi hoặc dán log traceback từ terminal.")
 
@@ -88,6 +138,14 @@ Cấu trúc dự án để đối chiếu đường dẫn file tương đối:
 
         result = await input_analyzer_agent.run(prompt)
         bug_report: BugReport = result.output
+
+        # Cập nhật Metrics
+        ctx.state.metrics_analyzer_calls += 1
+        try:
+            usage = result.usage()
+            ctx.state.metrics_analyzer_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
+        except Exception:
+            pass
 
         # Cập nhật State
         ctx.state.bug_types = bug_report.bug_types

@@ -50,19 +50,26 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
             if frame.code_snippet:
                 prompt += f"  Code: {frame.code_snippet}\n"
 
-        if ctx.state.action_history or ctx.state.user_plan_feedback:
-            prompt += "\nLỊCH SỬ THỬ NGHIỆM VÀ PHẢN HỒI (RẤT QUAN TRỌNG):\n"
-            if ctx.state.current_plan:
-                prompt += "Các bước sửa lỗi (Plan) mà bạn đã thử nghiệm ở lần trước:\n"
-                for step in ctx.state.current_plan:
-                    prompt += f"  - Bước {step.step_id}: {step.title} (File: {step.target_file})\n"
+        if ctx.state.iteration_history or ctx.state.action_history or ctx.state.user_plan_feedback:
+            prompt += "\nLỊCH SỬ CÁC VÒNG LẶP (CAUSAL CHAIN CONTEXT - RẤT QUAN TRỌNG):\n"
+            
+            if ctx.state.iteration_history:
+                for i, iter_ctx in enumerate(ctx.state.iteration_history, 1):
+                    prompt += f"--- Vòng {i} ---\n"
+                    prompt += f"  - Lỗi ban đầu: {iter_ctx.initial_error}\n"
+                    prompt += f"  - Các file đã sửa: {', '.join(iter_ctx.target_files)}\n"
+                    prompt += f"  - Tóm tắt patch:\n{iter_ctx.patch_summary}\n"
+                    prompt += f"  - Phản hồi/Lỗi mới từ User: {iter_ctx.user_feedback}\n"
+            
             if ctx.state.action_history:
-                prompt += "Lịch sử các lần crash/lỗi:\n"
+                prompt += "\nLịch sử các lần crash/lỗi hệ thống:\n"
                 for log in ctx.state.action_history:
                     prompt += f"  - {log}\n"
+                    
             if ctx.state.user_plan_feedback:
-                prompt += f"Lý do thất bại / Phản hồi yêu cầu Replan lần này:\n  -> {ctx.state.user_plan_feedback}\n"
-            prompt += "-> HÃY PHÂN TÍCH LÝ DO TẠI SAO CÁCH SỬA TRÊN LẠI THẤT BẠI VÀ TÌM HƯỚNG TIẾP CẬN MỚI. KHÔNG LẶP LẠI PLAN CŨ.\n"
+                prompt += f"\nPhản hồi yêu cầu Replan lần này:\n  -> {ctx.state.user_plan_feedback}\n"
+                
+            prompt += "-> HÃY PHÂN TÍCH LÝ DO TẠI SAO CÁCH SỬA TRƯỚC ĐÓ LẠI THẤT BẠI VÀ TÌM HƯỚNG TIẾP CẬN MỚI. KHÔNG LẶP LẠI PLAN CŨ.\n"
 
         # Nhúng Plan Template tương ứng với loại lỗi
         if ctx.state.bug_types:
@@ -77,6 +84,14 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
         try:
             result = await planner_agent.run(prompt)
             output: PlanWrapper = result.output
+            
+            # Cập nhật Metrics
+            ctx.state.metrics_planner_calls += 1
+            try:
+                usage = result.usage()
+                ctx.state.metrics_planner_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
+            except Exception:
+                pass
 
             ctx.state.current_plan = output.steps
             ctx.state.root_cause_explanation = output.root_cause

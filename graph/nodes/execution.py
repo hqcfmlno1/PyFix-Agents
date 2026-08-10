@@ -168,6 +168,14 @@ QUY TẮC QUAN TRỌNG:
                         result = await coder_agent.run(step_prompt, message_history=simple_history)
                     else:
                         result = await coder_agent.run(step_prompt)
+                        
+                    # Cập nhật Metrics
+                    ctx.state.metrics_coder_calls += 1
+                    try:
+                        usage = result.usage()
+                        ctx.state.metrics_coder_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
+                    except Exception:
+                        pass
 
                     step_fix = result.output
 
