@@ -192,3 +192,14 @@ def apply_all_hunks(original_content: str, hunks: List[PatchHunk]) -> tuple[bool
 
     return True, current, errors
 
+def count_tool_calls(messages: list) -> int:
+    """Đếm số lượng ToolCallPart trong danh sách các messages từ LLM."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    count = 0
+    for msg in messages:
+        if isinstance(msg, ModelResponse):
+            for part in getattr(msg, 'parts', []):
+                if isinstance(part, ToolCallPart):
+                    count += 1
+    return count
+

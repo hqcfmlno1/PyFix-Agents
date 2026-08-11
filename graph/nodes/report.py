@@ -58,15 +58,19 @@ class ReportNode(BaseNode[BugFixState]):
             "status": "success" if ctx.state.validation_passed else ("surrendered" if ctx.state.surrendered else "incomplete"),
             "replan_count": ctx.state.replan_count,
             "analyzer": {
-                "calls": ctx.state.metrics_analyzer_calls,
+                "tool_calls": ctx.state.metrics_analyzer_tool_calls,
                 "tokens": ctx.state.metrics_analyzer_tokens
             },
+            "repro": {
+                "tool_calls": ctx.state.metrics_repro_tool_calls,
+                "tokens": ctx.state.metrics_repro_tokens
+            },
             "planner": {
-                "calls": ctx.state.metrics_planner_calls,
+                "tool_calls": ctx.state.metrics_planner_tool_calls,
                 "tokens": ctx.state.metrics_planner_tokens
             },
             "coder": {
-                "calls": ctx.state.metrics_coder_calls,
+                "tool_calls": ctx.state.metrics_coder_tool_calls,
                 "tokens": ctx.state.metrics_coder_tokens
             }
         }
