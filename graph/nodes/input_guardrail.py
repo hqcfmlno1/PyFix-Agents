@@ -19,7 +19,7 @@ from graph.models import BugComplexity, BugFixState
 if TYPE_CHECKING:
     from graph.nodes.execution import ExecutionNode
     from graph.nodes.need_more_info import NeedMoreInfoNode
-    from graph.nodes.planning import PlanningNode
+    from graph.nodes.reproduction_plan import ReproductionPlanNode
 
 
 @dataclass
@@ -31,10 +31,10 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[NeedMoreInfoNode, ExecutionNode, PlanningNode]:
+    ) -> Union[NeedMoreInfoNode, ExecutionNode, ReproductionPlanNode]:
         from graph.nodes.execution import ExecutionNode
         from graph.nodes.need_more_info import NeedMoreInfoNode
-        from graph.nodes.planning import PlanningNode
+        from graph.nodes.reproduction_plan import ReproductionPlanNode
 
         missing: List[str] = []
 
@@ -77,5 +77,5 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
             print_step("⚡", "Guardrail", f"{GREEN}Lỗi ĐƠN GIẢN (1 file){RESET} — Chuyển thẳng sang {BOLD}Coder Agent{RESET} (không thinking)...")
             return ExecutionNode()
         else:
-            print_step("🧠", "Guardrail", f"{YELLOW}Lỗi PHỨC TẠP (nhiều file / yêu cầu plan){RESET} — Chuyển sang {BOLD}Planner Agent{RESET} (thinking)...")
-            return PlanningNode()
+            print_step("🧪", "Guardrail", f"{YELLOW}Lỗi PHỨC TẠP (nhiều file / yêu cầu plan){RESET} — Chuyển sang {BOLD}Reproduction Plan{RESET} để viết kịch bản tái hiện...")
+            return ReproductionPlanNode()

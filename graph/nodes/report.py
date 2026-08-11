@@ -50,7 +50,17 @@ class ReportNode(BaseNode[BugFixState]):
         if ctx.state.final_fixes and ctx.state.want_apply:
             lines.append(f"\n  📄 Các file đã được chỉnh sửa ({len(ctx.state.final_fixes)} file):")
             for ffix in ctx.state.final_fixes:
-                lines.append(f"     • {CYAN}{ffix.target_file}{RESET}")
+                lines.append(f"     • {CYAN}{BOLD}{ffix.target_file}{RESET}")
+                if hasattr(ffix, 'hunks') and ffix.hunks:
+                    for i, hunk in enumerate(ffix.hunks, 1):
+                        lines.append(f"       {YELLOW}--- Hunk #{i}{RESET}")
+                        if hunk.old_lines:
+                            for line in hunk.old_lines.splitlines():
+                                lines.append(f"       {RED}- {line}{RESET}")
+                        if hunk.new_lines:
+                            for line in hunk.new_lines.splitlines():
+                                lines.append(f"       {GREEN}+ {line}{RESET}")
+                        lines.append("")
             lines.append(f"  💡 Giải thích tổng thể: {ctx.state.final_explanation}")
         elif not ctx.state.want_apply:
             lines.append(f"\n  💡 Chế độ: {YELLOW}Chỉ tư vấn / xem kế hoạch (không chỉnh sửa file thực tế){RESET}")

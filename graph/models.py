@@ -162,7 +162,12 @@ class BugFixState(BaseModel):
     user_sentiment: UserSentiment = UserSentiment.INITIAL
     user_suggested_fix: Optional[str] = None
 
-    # ── Phase 3: Planning ────────────────────────────────────────────────────
+    # ── Phase 3: Planning / Reproduction ─────────────────────────────────────
+
+    repro_script_path: Optional[str] = None
+    repro_confirmed: Optional[bool] = None
+    repro_output: str = ""
+    repro_retry_count: int = 0
 
     current_plan: List[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
