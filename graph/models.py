@@ -198,10 +198,12 @@ class BugFixState(BaseModel):
 
     # ── Phase 7: Metrics ─────────────────────────────────────────────────────
     metrics_analyzer_tokens: int = 0
-    metrics_analyzer_calls: int = 0
+    metrics_analyzer_tool_calls: int = 0
+    metrics_repro_tokens: int = 0
+    metrics_repro_tool_calls: int = 0
     metrics_planner_tokens: int = 0
-    metrics_planner_calls: int = 0
+    metrics_planner_tool_calls: int = 0
     metrics_coder_tokens: int = 0
-    metrics_coder_calls: int = 0
+    metrics_coder_tool_calls: int = 0
 
     model_config = {"arbitrary_types_allowed": True}

@@ -72,6 +72,16 @@ CHỈ TRẢ VỀ NỘI DUNG FILE PYTHON (DẠNG CHUỖI THUẦN). KHÔNG GIẢI 
 
         try:
             result = await repro_agent.run(prompt)
+            
+            # Cập nhật Metrics
+            from graph.helpers import count_tool_calls
+            ctx.state.metrics_repro_tool_calls += count_tool_calls(result.new_messages())
+            try:
+                usage = result.usage()
+                ctx.state.metrics_repro_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
+            except Exception:
+                pass
+
             script_content = result.output.strip()
             
             # Xóa markdown backticks nếu LLM vẫn ngoan cố trả về
