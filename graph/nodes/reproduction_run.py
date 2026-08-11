@@ -65,18 +65,21 @@ class ReproductionRunNode(BaseNode[BugFixState]):
             # Lớp 1: Bắt buộc phải có lỗi (returncode != 0)
             # Lớp 2: Exception class phải khớp
             # Lớp 3: Traceback nên chứa file đích
+            # Lớp 4: Error message phải khớp (tránh lỗi cùng file, cùng loại nhưng khác bản chất)
             
             error_class_str = ctx.state.error_class or ""
             target_file_str = os.path.basename(ctx.state.target_file) if ctx.state.target_file else ""
+            error_message_str = ctx.state.error_message or ""
 
             is_crash = proc.returncode != 0
             has_correct_exception = error_class_str in stderr if error_class_str else True
             has_target_file = target_file_str in stderr if target_file_str else True
+            has_correct_message = error_message_str in stderr if error_message_str else True
 
-            if is_crash and has_correct_exception and has_target_file:
-                print(f"  {GREEN}✅ Tái hiện THÀNH CÔNG! Đã kích hoạt đúng lỗi {error_class_str}.{RESET}")
+            if is_crash and has_correct_exception and has_target_file and has_correct_message:
+                print(f"  {GREEN}✅ Tái hiện THÀNH CÔNG! Đã kích hoạt đúng lỗi {error_class_str}: {error_message_str}{RESET}")
                 ctx.state.repro_confirmed = True
-                self._cleanup(ctx)
+                # KHÔNG xóa file ở đây, giữ lại cho ValidationNode chạy
                 return PlanningNode()
             else:
                 ctx.state.repro_retry_count += 1
@@ -85,8 +88,10 @@ class ReproductionRunNode(BaseNode[BugFixState]):
                         reason = "Script chạy thành công (return 0), không văng ra lỗi nào."
                     elif not has_correct_exception:
                         reason = f"Script văng ra lỗi nhưng không chứa `{error_class_str}`."
-                    else:
+                    elif not has_target_file:
                         reason = f"Script văng lỗi nhưng traceback không chứa file gốc `{target_file_str}` (có thể lỗi ở ngay file test)."
+                    elif not has_correct_message:
+                        reason = f"Script văng đúng lỗi {error_class_str} tại {target_file_str} nhưng sai thông điệp. Cần thông điệp chứa `{error_message_str}`."
                     
                     print(f"  {YELLOW}⚠️ Tái hiện thất bại lần {ctx.state.repro_retry_count}: {reason}{RESET}")
                     print(f"  {CYAN}🔄 Đang yêu cầu Planner viết lại script...{RESET}")
@@ -94,7 +99,6 @@ class ReproductionRunNode(BaseNode[BugFixState]):
                 else:
                     print(f"  {RED}❌ Đã thử 3 lần nhưng không thể tái hiện lỗi tự động.{RESET}")
                     ctx.state.repro_confirmed = False
-                    self._cleanup(ctx)
                     return PlanningNode()
 
         except subprocess.TimeoutExpired:
@@ -106,12 +110,10 @@ class ReproductionRunNode(BaseNode[BugFixState]):
             else:
                 print(f"  {RED}❌ Đã thử 3 lần nhưng script tái hiện toàn bị treo.{RESET}")
                 ctx.state.repro_confirmed = False
-                self._cleanup(ctx)
                 return PlanningNode()
         except Exception as exc:
             ctx.state.repro_output = f"Lỗi hệ thống khi chạy subprocess: {exc}"
             ctx.state.repro_confirmed = False
-            self._cleanup(ctx)
             return PlanningNode()
             
     def _cleanup(self, ctx: GraphRunContext[BugFixState]):

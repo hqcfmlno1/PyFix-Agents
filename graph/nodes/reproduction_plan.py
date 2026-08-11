@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from pydantic_graph import BaseNode, GraphRunContext
 
-from graph.agents import planner_agent
+from graph.agents import repro_agent
 from graph.config import BOLD, CYAN, PLANNER_MODEL_NAME, RED, RESET, YELLOW
 from graph.helpers import print_step
 from graph.models import BugFixState
@@ -51,7 +51,7 @@ YÊU CẦU CỦA SCRIPT TÁI HIỆN:
 2. Import trực tiếp hàm / class bị lỗi từ file nguồn (KHÔNG chạy toàn bộ chương trình). Cấu trúc thư mục tương đối như trong stack trace.
 3. Truyền đúng dữ liệu giả (mock data) dựa trên context trong stack trace để kích hoạt lỗi.
 4. KHÔNG dùng input() hay bất cứ tương tác I/O nào có thể làm treo terminal.
-5. Script phải ngắn (< 20 dòng), tự chứa và có thể chạy được ngay lập tức ở thư mục gốc của dự án.
+5. Script không được quá dài phải cô đọng, tự chứa và có thể chạy được ngay lập tức ở thư mục gốc của dự án.
 """
 
         if ctx.state.repro_retry_count > 0:
@@ -71,8 +71,8 @@ CHỈ TRẢ VỀ NỘI DUNG FILE PYTHON (DẠNG CHUỖI THUẦN). KHÔNG GIẢI 
 """
 
         try:
-            result = await planner_agent.run(prompt)
-            script_content = result.data.strip()
+            result = await repro_agent.run(prompt)
+            script_content = result.output.strip()
             
             # Xóa markdown backticks nếu LLM vẫn ngoan cố trả về
             if script_content.startswith("```python"):

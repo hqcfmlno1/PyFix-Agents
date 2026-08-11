@@ -20,55 +20,27 @@ class ReportNode(BaseNode[BugFixState]):
     """
 
     async def run(self, ctx: GraphRunContext[BugFixState]) -> End[str]:
-        print_header("Báo cáo kết quả — PyFix-Agents v2")
-
-        passed = ctx.state.validation_passed
-        surrendered = ctx.state.surrendered
-
-        if passed:
-            status_icon = "✅"
-            status_text = "THÀNH CÔNG (Đã khắc phục lỗi gốc)"
-            status_color = GREEN
-        elif surrendered:
-            status_icon = "🏳️"
-            status_text = f"THẤT BẠI — AGENT CHỊU THUA (Vượt quá {ctx.state.max_replan_limit} lần Replan)"
-            status_color = RED
-        else:
-            status_icon = "⚠"
-            status_text = "KẾT THÚC (Chưa xử lý triệt để)"
-            status_color = YELLOW
-
-        types_str = ", ".join([bt.value.upper() for bt in ctx.state.bug_types]) if ctx.state.bug_types else "N/A"
-
-        lines = [
-            f"  {status_icon} Trạng thái : {status_color}{BOLD}{status_text}{RESET}",
-            f"  📁 Dự án     : {ctx.state.repo_path}",
-            f"  🐛 Loại lỗi  : {CYAN}{types_str}{RESET}",
-            f"  🔄 Số lần Replan : {ctx.state.replan_count}/{ctx.state.max_replan_limit}",
-        ]
+        lines = ["\n--- KẾT QUẢ SỬA LỖI ---"]
 
         if ctx.state.final_fixes and ctx.state.want_apply:
-            lines.append(f"\n  📄 Các file đã được chỉnh sửa ({len(ctx.state.final_fixes)} file):")
+            lines.append("Các file đã được chỉnh sửa:")
             for ffix in ctx.state.final_fixes:
-                lines.append(f"     • {CYAN}{BOLD}{ffix.target_file}{RESET}")
+                lines.append(f"  • {ffix.target_file}")
                 if hasattr(ffix, 'hunks') and ffix.hunks:
-                    for i, hunk in enumerate(ffix.hunks, 1):
-                        lines.append(f"       {YELLOW}--- Hunk #{i}{RESET}")
+                    for hunk in ffix.hunks:
                         if hunk.old_lines:
                             for line in hunk.old_lines.splitlines():
-                                lines.append(f"       {RED}- {line}{RESET}")
+                                lines.append(f"    - {line}")
                         if hunk.new_lines:
                             for line in hunk.new_lines.splitlines():
-                                lines.append(f"       {GREEN}+ {line}{RESET}")
-                        lines.append("")
-            lines.append(f"  💡 Giải thích tổng thể: {ctx.state.final_explanation}")
+                                lines.append(f"    + {line}")
         elif not ctx.state.want_apply:
-            lines.append(f"\n  💡 Chế độ: {YELLOW}Chỉ tư vấn / xem kế hoạch (không chỉnh sửa file thực tế){RESET}")
+            lines.append("Chế độ: Chỉ tư vấn (không sửa file).")
+        else:
+            lines.append("Không có file nào được chỉnh sửa.")
 
-        if ctx.state.validation_errors:
-            lines.append(f"\n  {YELLOW}⚠ Chi tiết lỗi / Ghi chú trong quá trình chạy:{RESET}")
-            for err in ctx.state.validation_errors[-5:]:
-                lines.append(f"     • {RED}{err}{RESET}")
+        if ctx.state.surrendered:
+            lines.append("\n[THẤT BẠI] Hệ thống không thể tự sửa lỗi triệt để.")
 
         report = "\n".join(lines)
         ctx.state.final_report = report
@@ -83,7 +55,7 @@ class ReportNode(BaseNode[BugFixState]):
         metrics = {
             "timestamp": datetime.now().isoformat(),
             "repo_path": ctx.state.repo_path,
-            "status": "success" if passed else ("surrendered" if surrendered else "incomplete"),
+            "status": "success" if ctx.state.validation_passed else ("surrendered" if ctx.state.surrendered else "incomplete"),
             "replan_count": ctx.state.replan_count,
             "analyzer": {
                 "calls": ctx.state.metrics_analyzer_calls,
@@ -99,7 +71,10 @@ class ReportNode(BaseNode[BugFixState]):
             }
         }
 
-        metrics_file = os.path.join(ctx.state.repo_path, "pyfix_metrics.json")
+        # Lưu file metrics vào thư mục gốc của PyFix-Agents thay vì repo bị lỗi
+        pyfix_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        metrics_file = os.path.join(pyfix_root, "pyfix_metrics.json")
+        
         try:
             if os.path.exists(metrics_file):
                 with open(metrics_file, "r", encoding="utf-8") as f:
@@ -111,6 +86,13 @@ class ReportNode(BaseNode[BugFixState]):
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"  {RED}⚠ Lỗi khi ghi file metrics: {e}{RESET}")
+
+        # Dọn dẹp: Xóa file repro (nếu có) khi phiên làm việc đã hoàn thành
+        if getattr(ctx.state, 'repro_script_path', None) and os.path.exists(ctx.state.repro_script_path):
+            try:
+                os.remove(ctx.state.repro_script_path)
+            except Exception:
+                pass
 
         return End(report)
 
