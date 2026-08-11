@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from graph.nodes.planning import PlanningNode
     from graph.nodes.report import ReportNode
     from graph.nodes.input_analyzer import InputAnalyzerNode
+    from graph.nodes.reproduction_plan import ReproductionPlanNode
 
 
 @dataclass
@@ -32,10 +33,11 @@ class ValidationNode(BaseNode[BugFixState]):
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[PlanningNode, ReportNode, InputAnalyzerNode]:
+    ) -> Union[ReproductionPlanNode, PlanningNode, ReportNode, InputAnalyzerNode]:
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
         from graph.nodes.input_analyzer import InputAnalyzerNode
+        from graph.nodes.reproduction_plan import ReproductionPlanNode
 
         print_step("🔍", "Validation Node", "1/2. Kiểm tra cú pháp mã nguồn (py_compile)...")
 
@@ -55,6 +57,30 @@ class ValidationNode(BaseNode[BugFixState]):
                 return self._handle_failure(ctx, f"Lỗi cú pháp ({ffix.target_file}): {syntax_err}")
 
         print_step("✅", "Validation", f"{GREEN}Cú pháp mã nguồn hợp lệ!{RESET}")
+
+        print_step("🔍", "Validation Node", "2/2. Kiểm tra bằng kịch bản tái hiện (nếu có)...")
+        if getattr(ctx.state, 'repro_confirmed', False) and ctx.state.repro_script_path and os.path.exists(ctx.state.repro_script_path):
+            env = os.environ.copy()
+            env["PYTHONPATH"] = ctx.state.repo_path
+            try:
+                proc = subprocess.run(
+                    [sys.executable, ctx.state.repro_script_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    cwd=ctx.state.repo_path,
+                    env=env
+                )
+                if proc.returncode != 0:
+                    runtime_err = (proc.stderr or proc.stdout).strip()
+                    print_step("❌", "Validation", f"{RED}Lỗi khi chạy kịch bản tái hiện:{RESET}\n  {runtime_err}")
+                    return self._handle_failure(ctx, f"Kịch bản tái hiện vẫn báo lỗi: {runtime_err}")
+                else:
+                    print_step("✅", "Validation", f"{GREEN}Kịch bản tái hiện chạy thành công (không còn lỗi)!{RESET}")
+            except Exception as e:
+                print_step("⚠️", "Validation", f"{YELLOW}Không thể chạy kịch bản tái hiện: {e}{RESET}")
+        else:
+            print_step("⏭️", "Validation", f"{YELLOW}Bỏ qua do không có kịch bản tái hiện tự động.{RESET}")
 
         # ── Lưu vào Causal Chain Context (IterationHistory)
         patch_summary = ""
@@ -78,9 +104,10 @@ class ValidationNode(BaseNode[BugFixState]):
 
     def _handle_failure(
         self, ctx: GraphRunContext[BugFixState], error_msg: str
-    ) -> Union[PlanningNode, ReportNode]:
+    ) -> Union[ReproductionPlanNode, PlanningNode, ReportNode]:
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
+        from graph.nodes.reproduction_plan import ReproductionPlanNode
 
         ctx.state.validation_passed = False
         ctx.state.validation_errors.append(error_msg)
@@ -94,12 +121,19 @@ class ValidationNode(BaseNode[BugFixState]):
                 ctx.state.complexity = BugComplexity.COMPLEX
                 print(f"  {YELLOW}⬆ Nâng cấp: DirectFix thất bại → Chuyển sang Planner Agent (Thinking) để phân tích sâu...{RESET}")
             else:
-                print(f"  {YELLOW}🔄 Quay về Planner để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
+                print(f"  {YELLOW}🔄 Quay về bước Tái hiện lỗi để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
 
             ctx.state.user_plan_feedback = f"Validation thất bại (Lỗi chưa hết). Chi tiết lỗi: {error_msg}"
-            return PlanningNode()
+            
+            # Reset repro state để tái hiện lại với codebase mới
+            ctx.state.repro_confirmed = None
+            ctx.state.repro_script_path = None
+            ctx.state.repro_output = ""
+            ctx.state.repro_retry_count = 0
+            
+            return ReproductionPlanNode()
         else:
-            print_step("⛔", "Validation", f"{RED}Đã vượt quá {ctx.state.max_replan_limit} lần thử mà chưa sửa được lỗi gốc. Agent chịu thua.{RESET}")
+            # Quá giới hạn replan -> chịu thua
+            print(f"\n  {RED}☠️ Đã thử sửa quá {ctx.state.max_replan_limit} lần nhưng không thành công.{RESET}")
             ctx.state.surrendered = True
             return ReportNode()
-

@@ -10,6 +10,8 @@ from graph.nodes.plan_interceptor import PlanInterceptorNode
 from graph.nodes.planning import PlanningNode
 from graph.nodes.project_init import ProjectInitializerNode
 from graph.nodes.report import ReportNode
+from graph.nodes.reproduction_plan import ReproductionPlanNode
+from graph.nodes.reproduction_run import ReproductionRunNode
 from graph.nodes.validation import ValidationNode
 
 __all__ = [
@@ -22,4 +24,6 @@ __all__ = [
     "ExecutionNode",
     "ValidationNode",
     "ReportNode",
+    "ReproductionPlanNode",
+    "ReproductionRunNode",
 ]

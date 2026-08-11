@@ -50,6 +50,28 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC):
             if frame.code_snippet:
                 prompt += f"  Code: {frame.code_snippet}\n"
 
+        if ctx.state.repro_confirmed is True:
+            prompt += f"""
+KẾT QUẢ TÁI HIỆN LỖI (ĐÃ XÁC NHẬN):
+✅ Script tái hiện đã kích hoạt đúng lỗi {ctx.state.error_class}.
+Log lỗi thực tế từ kịch bản tái hiện:
+---
+{ctx.state.repro_output}
+---
+Điều này xác nhận chẩn đoán ban đầu là CHÍNH XÁC. Hãy tập trung vào việc lập plan sửa lỗi.
+"""
+        elif ctx.state.repro_confirmed is False:
+            prompt += f"""
+KẾT QUẢ TÁI HIỆN LỖI (CHƯA XÁC NHẬN / THẤT BẠI):
+⚠️ Script tái hiện KHÔNG kích hoạt được đúng lỗi ban đầu (hoặc đã bị treo).
+Output khi chạy script:
+---
+{ctx.state.repro_output}
+---
+Điều này có thể do lỗi phụ thuộc vào runtime data phức tạp hoặc môi trường cụ thể.
+Hãy thận trọng hơn khi đọc code và KHÔNG đưa ra giả định.
+"""
+
         if ctx.state.iteration_history or ctx.state.action_history or ctx.state.user_plan_feedback:
             prompt += "\nLỊCH SỬ CÁC VÒNG LẶP (CAUSAL CHAIN CONTEXT - RẤT QUAN TRỌNG):\n"
             

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from graph.nodes.input_guardrail import InputGateGuardrailNode
     from graph.nodes.planning import PlanningNode
     from graph.nodes.report import ReportNode
+    from graph.nodes.reproduction_plan import ReproductionPlanNode
 
 
 @dataclass
@@ -29,10 +30,13 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
     Việc chẩn đoán root cause được để PlanningNode thực hiện sau khi đọc code thực tế.
     """
 
-    async def run(self, ctx: GraphRunContext[BugFixState]) -> Union[InputGateGuardrailNode, PlanningNode, ReportNode]:
+    async def run(
+        self, ctx: GraphRunContext[BugFixState]
+    ) -> Union[InputGateGuardrailNode, PlanningNode, ReportNode, ReproductionPlanNode]:
         from graph.nodes.input_guardrail import InputGateGuardrailNode
         from graph.nodes.planning import PlanningNode
         from graph.nodes.report import ReportNode
+        from graph.nodes.reproduction_plan import ReproductionPlanNode
 
         # ── Dual-Purpose Hub: Kiểm tra xem đây là lần chạy đầu hay vòng lặp phản hồi
         if ctx.state.iteration_history:
@@ -76,8 +80,14 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
                 if ctx.state.iteration_history:
                     ctx.state.iteration_history[-1].user_feedback = raw_input
                 
-                print_step("🔄", "Analyzer", f"{YELLOW}Lỗi chưa triệt để. Chuyển cấp (Escalation) sang Planner (COMPLEX)...{RESET}")
-                return PlanningNode()
+                # Reset repro state
+                ctx.state.repro_confirmed = None
+                ctx.state.repro_script_path = None
+                ctx.state.repro_output = ""
+                ctx.state.repro_retry_count = 0
+                
+                print_step("🔄", "Analyzer", f"{YELLOW}Lỗi chưa triệt để. Chuyển cấp (Escalation) sang bước Tái hiện lỗi...{RESET}")
+                return ReproductionPlanNode()
 
         # ── INITIAL: Phân tích Traceback lần đầu tiên
         print(f"\n{'─'*60}")
