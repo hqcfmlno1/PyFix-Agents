@@ -73,7 +73,7 @@ ask_human_tool = Tool(_ask_human_sync, name="ask_human")
 
 # ── Agent Definitions ────────────────────────────────────────────────────────
 input_analyzer_agent: Agent[None, BugReport] = Agent(
-    analyzer_model,  # Gemma — nhẹ, nhanh
+    planner_model,  # Gemma — nhẹ, nhanh
     output_type=BugReport,
     system_prompt=INPUT_ANALYZER_PROMPT,
     retries=2,
@@ -86,6 +86,15 @@ planner_agent: Agent[None, PlanWrapper] = Agent(
     system_prompt=PLANNER_PROMPT,
     toolsets=[mcp_toolset_planner],
     tools=[ask_human_tool],
+    retries=2,
+)
+
+# ── Viết Kịch Bản Tái Hiện (Reproduction) ───────────────────────────
+repro_agent: Agent[None, str] = Agent(
+    planner_model,  # Dùng gemma free
+    output_type=str,
+    system_prompt="Bạn là một Software Engineer / QA chuyên nghiệp. Nhiệm vụ của bạn là viết kịch bản Python độc lập (Reproduction Script) để tái hiện chính xác lỗi dựa trên Traceback được cung cấp.",
+    toolsets=[mcp_toolset_planner],
     retries=2,
 )
 

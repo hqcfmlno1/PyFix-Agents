@@ -18,6 +18,8 @@ from graph.nodes.plan_interceptor import PlanInterceptorNode
 from graph.nodes.execution import ExecutionNode
 from graph.nodes.validation import ValidationNode
 from graph.nodes.report import ReportNode
+from graph.nodes.reproduction_plan import ReproductionPlanNode
+from graph.nodes.reproduction_run import ReproductionRunNode
 
 
 # ── Xây dựng Graph bằng GraphBuilder (pydantic-graph) ───────────────────
@@ -40,6 +42,8 @@ _builder.add(
     _builder.node(ExecutionNode),
     _builder.node(ValidationNode),
     _builder.node(ReportNode),
+    _builder.node(ReproductionPlanNode),
+    _builder.node(ReproductionRunNode)
 )
 
 bug_fix_graph = _builder.build()

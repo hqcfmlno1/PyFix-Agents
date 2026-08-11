@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Union
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import input_analyzer_agent
-from graph.config import BOLD, CYAN, ANALYZER_MODEL_NAME, RED, RESET, YELLOW
+from graph.config import BOLD, CYAN, ANALYZER_MODEL_NAME, RED, RESET, YELLOW, GREEN
 from graph.helpers import print_step
 from graph.models import BugFixState, BugReport, BugComplexity, UserSentiment
 
@@ -41,7 +41,20 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
         # ── Dual-Purpose Hub: Kiểm tra xem đây là lần chạy đầu hay vòng lặp phản hồi
         if ctx.state.iteration_history:
             print(f"\n{'─'*60}")
-            print_step("🧪", "Human-in-the-Loop", "Vui lòng chạy thử ứng dụng (runtime) và kiểm tra xem lỗi đã được khắc phục chưa.")
+            
+            # Liệt kê các file vừa sửa
+            if ctx.state.final_fixes:
+                print(f"  {CYAN}Các file vừa được Agent chỉnh sửa:{RESET}")
+                for ffix in ctx.state.final_fixes:
+                    print(f"    - {ffix.target_file}")
+                print()
+
+            # Hiển thị thông báo tùy thuộc vào việc Repro tự động có pass hay không
+            if getattr(ctx.state, 'repro_confirmed', False):
+                print_step("✨", "Automated Validation", f"{GREEN}Hệ thống đã chạy kịch bản tự động và XÁC NHẬN lỗi gốc không còn xuất hiện!{RESET}")
+                print_step("🧪", "Human-in-the-Loop", "Vui lòng kiểm tra lại thủ công lần cuối (UI, Data, Side-effects...) để đảm bảo chắc chắn.")
+            else:
+                print_step("🧪", "Human-in-the-Loop", "Vui lòng chạy thử ứng dụng (runtime) và kiểm tra xem lỗi đã được khắc phục chưa.")
             print(f"""
   {BOLD}Hướng dẫn phản hồi:{RESET}
   • {GREEN}Nhập 'ok', 'done', 'yes'{RESET} nếu ứng dụng đã chạy tốt.
@@ -75,19 +88,78 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
                 return ReportNode()
             else:
                 ctx.state.user_sentiment = UserSentiment.UNHAPPY
-                ctx.state.user_suggested_fix = raw_input
                 ctx.state.complexity = BugComplexity.COMPLEX
                 if ctx.state.iteration_history:
                     ctx.state.iteration_history[-1].user_feedback = raw_input
                 
-                # Reset repro state
-                ctx.state.repro_confirmed = None
-                ctx.state.repro_script_path = None
-                ctx.state.repro_output = ""
-                ctx.state.repro_retry_count = 0
-                
-                print_step("🔄", "Analyzer", f"{YELLOW}Lỗi chưa triệt để. Chuyển cấp (Escalation) sang bước Tái hiện lỗi...{RESET}")
-                return ReproductionPlanNode()
+                # Thử phân tích xem người dùng có dán traceback mới không
+                print_step("🤖", "Input Analyzer Agent", f"Đang phân tích phản hồi/lỗi mới với {ANALYZER_MODEL_NAME}...")
+                prompt = f"""Phân tích nội dung sau. Nếu đây là một Traceback log, hãy lọc nhiễu thư viện ngoài và trích xuất stack_trace.
+Nếu đây chỉ là câu nói bình thường, hãy trả về stack_trace rỗng.
+
+---
+{raw_input}
+---
+
+Cấu trúc dự án để đối chiếu đường dẫn file tương đối:
+{ctx.state.project_tree[:1500]}
+"""
+                try:
+                    result = await input_analyzer_agent.run(prompt)
+                    bug_report: BugReport = result.output
+                    
+                    ctx.state.metrics_analyzer_calls += 1
+                    try:
+                        usage = result.usage()
+                        ctx.state.metrics_analyzer_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
+                    except Exception:
+                        pass
+                    
+                    # Nếu tìm thấy stack_trace mới, cập nhật state với lỗi mới này
+                    if bug_report.stack_trace:
+                        print_step("✅", "Phân tích xong", "Phát hiện lỗi mới (New Exception) từ phản hồi của bạn.")
+                        
+                        # Reset repro state vì đây là lỗi mới, cần viết lại script repro mới
+                        ctx.state.repro_confirmed = None
+                        ctx.state.repro_script_path = None
+                        ctx.state.repro_output = ""
+                        ctx.state.repro_retry_count = 0
+                        
+                        ctx.state.bug_types = bug_report.bug_types
+                        ctx.state.error_class = bug_report.error_class
+                        ctx.state.error_message = bug_report.error_message
+                        ctx.state.stack_trace = bug_report.stack_trace
+                        ctx.state.target_file = bug_report.target_file
+                        ctx.state.error_file = bug_report.target_file
+                        ctx.state.error_line = bug_report.error_line
+                        
+                        # Xoá user_suggested_fix vì đây là log lỗi mới, không phải lời khuyên
+                        ctx.state.user_suggested_fix = None
+                        
+                        if not ctx.state.target_file:
+                            for frame in reversed(bug_report.stack_trace):
+                                if frame.role == "crash_point" or not ctx.state.target_file:
+                                    ctx.state.target_file = frame.file_path
+                                    ctx.state.error_line = frame.line_number
+                                    break
+                                    
+                        print_step("🔄", "Analyzer", f"{YELLOW}Lỗi mới phát sinh. Chuyển cấp (Escalation) sang bước Tái hiện lỗi mới...{RESET}")
+                        return ReproductionPlanNode()
+                        
+                    else:
+                        print_step("✅", "Phân tích xong", "Ghi nhận gợi ý/phản hồi (không chứa traceback mới).")
+                        # Không có log lỗi mới -> gán đoạn text này làm gợi ý sửa đổi
+                        ctx.state.user_suggested_fix = raw_input
+                        
+                        print_step("🔄", "Analyzer", f"{YELLOW}Đã nhận gợi ý. Bỏ qua Repro, quay thẳng lại Planner để lên kế hoạch mới...{RESET}")
+                        return PlanningNode()
+                        
+                except Exception as e:
+                    print_step("⚠", "Input Analyzer Agent", f"Không thể phân tích phản hồi bằng LLM: {e}")
+                    # Fallback an toàn: lưu làm gợi ý
+                    ctx.state.user_suggested_fix = raw_input
+                    print_step("🔄", "Analyzer", f"{YELLOW}Đã nhận gợi ý. Quay thẳng lại Planner để lên kế hoạch mới...{RESET}")
+                    return PlanningNode()
 
         # ── INITIAL: Phân tích Traceback lần đầu tiên
         print(f"\n{'─'*60}")

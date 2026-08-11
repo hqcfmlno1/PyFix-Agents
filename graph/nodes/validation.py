@@ -119,19 +119,17 @@ class ValidationNode(BaseNode[BugFixState]):
             # Nếu đang là SIMPLE mà thất bại → Nâng cấp lên COMPLEX để Planner (Thinking) vào cuộc
             if ctx.state.complexity == BugComplexity.SIMPLE:
                 ctx.state.complexity = BugComplexity.COMPLEX
-                print(f"  {YELLOW}⬆ Nâng cấp: DirectFix thất bại → Chuyển sang Planner Agent (Thinking) để phân tích sâu...{RESET}")
+                print(f"  {YELLOW}⬆ Nâng cấp: Lỗi phức tạp hơn dự kiến → Chuyển sang Planner Agent (Thinking) để phân tích sâu...{RESET}")
             else:
-                print(f"  {YELLOW}🔄 Quay về bước Tái hiện lỗi để chẩn đoán và tạo Plan mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
+                print(f"  {YELLOW}🔄 Quay về bước Planning để lên phương án sửa lỗi mới... (Lần replan {ctx.state.replan_count + 1}/{ctx.state.max_replan_limit}){RESET}")
 
-            ctx.state.user_plan_feedback = f"Validation thất bại (Lỗi chưa hết). Chi tiết lỗi: {error_msg}"
+            ctx.state.user_plan_feedback = f"Validation thất bại (Lỗi chưa hết hoặc mã nguồn sai cú pháp). Chi tiết lỗi: {error_msg}"
             
-            # Reset repro state để tái hiện lại với codebase mới
-            ctx.state.repro_confirmed = None
-            ctx.state.repro_script_path = None
-            ctx.state.repro_output = ""
-            ctx.state.repro_retry_count = 0
+            # CHÚ Ý: KHÔNG reset repro_script ở đây.
+            # Chúng ta giữ nguyên file _pyfix_repro.py cũ để sau khi Planning/Execution sửa xong,
+            # ValidationNode có thể chạy lại chính xác file test này (TDD style).
             
-            return ReproductionPlanNode()
+            return PlanningNode()
         else:
             # Quá giới hạn replan -> chịu thua
             print(f"\n  {RED}☠️ Đã thử sửa quá {ctx.state.max_replan_limit} lần nhưng không thành công.{RESET}")
