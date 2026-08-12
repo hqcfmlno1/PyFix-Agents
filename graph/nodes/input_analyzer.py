@@ -38,6 +38,16 @@ class InputAnalyzerNode(BaseNode[BugFixState]):
         from graph.nodes.report import ReportNode
         from graph.nodes.reproduction_plan import ReproductionPlanNode
 
+        def _normalize_paths(report: BugReport):
+            import os
+            if not getattr(ctx.state, 'repo_path', None): return
+            if report.target_file and not os.path.isabs(report.target_file):
+                report.target_file = os.path.normpath(os.path.join(ctx.state.repo_path, report.target_file))
+            if report.stack_trace:
+                for frame in report.stack_trace:
+                    if frame.file_path and not os.path.isabs(frame.file_path):
+                        frame.file_path = os.path.normpath(os.path.join(ctx.state.repo_path, frame.file_path))
+
         # ── Dual-Purpose Hub: Kiểm tra xem đây là lần chạy đầu hay vòng lặp phản hồi
         if ctx.state.iteration_history:
             print(f"\n{'─'*60}")
@@ -118,6 +128,7 @@ Cấu trúc dự án để đối chiếu đường dẫn file tương đối:
                     
                     # Nếu tìm thấy stack_trace mới, cập nhật state với lỗi mới này
                     if bug_report.stack_trace:
+                        _normalize_paths(bug_report)
                         print_step("✅", "Phân tích xong", "Phát hiện lỗi mới (New Exception) từ phản hồi của bạn.")
                         
                         # Reset repro state vì đây là lỗi mới, cần viết lại script repro mới
@@ -230,6 +241,8 @@ Cấu trúc dự án để đối chiếu đường dẫn file tương đối:
             ctx.state.metrics_analyzer_tokens += (usage.request_tokens or 0) + (usage.response_tokens or 0)
         except Exception:
             pass
+
+        _normalize_paths(bug_report)
 
         # Cập nhật State
         ctx.state.bug_types = bug_report.bug_types
