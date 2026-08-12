@@ -74,6 +74,12 @@ def read_file(
     truyền start_line và end_line để tiết kiệm token.
     Kết quả trả về bao gồm nội dung code và danh sách tất cả
     các symbol (function, class) trong file kèm vị trí dòng của chúng.
+    
+    LƯU Ý QUAN TRỌNG DÀNH CHO BẠN (AGENT):
+    - TUYỆT ĐỐI KHÔNG đọc lặp lại các dòng đã đọc! Nếu lượt trước bạn đã đọc 
+      dòng 1 đến 30, và bây giờ muốn đọc tiếp, CHỈ ĐƯỢC truyền start_line=31, end_line=50.
+    - Bạn có thể xem lại lịch sử trò chuyện để lấy thông tin các dòng đã đọc trước đó.
+    - Đừng gọi từ dòng 1 đến 40 nếu bạn đã đọc dòng 1-30 rồi.
 
     Args:
         path: Đường dẫn đến file .py cần đọc.

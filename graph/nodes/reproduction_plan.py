@@ -37,7 +37,11 @@ class ReproductionPlanNode(BaseNode[BugFixState]):
         prompt = f"""NHIỆM VỤ: Viết một Python script ngắn gọn để tái hiện lỗi sau:
 - Exception: {ctx.state.error_class}: {ctx.state.error_message}
 - File crash chính: {ctx.state.target_file}, Dòng: {ctx.state.error_line}
+"""
+        if ctx.state.runtime_input_data:
+            prompt += f"- Dữ liệu đầu vào (Runtime Input) từ người dùng: {ctx.state.runtime_input_data}\n"
 
+        prompt += """
 CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC ĐỂ HIỂU CONTEXT):
 """
         for frame in ctx.state.stack_trace:
@@ -48,10 +52,10 @@ CHI TIẾT CALL STACK (BẮT BUỘC ĐỌC ĐỂ HIỂU CONTEXT):
         prompt += """
 YÊU CẦU CỦA SCRIPT TÁI HIỆN:
 1. Bạn CẦN ĐỌC CODE THỰC TẾ (dùng tool đọc file) tại các điểm crash để hiểu hàm cần gọi.
-2. Import trực tiếp hàm / class bị lỗi từ file nguồn (KHÔNG chạy toàn bộ chương trình). Cấu trúc thư mục tương đối như trong stack trace.
-3. Truyền đúng dữ liệu giả (mock data) dựa trên context trong stack trace để kích hoạt lỗi.
-4. KHÔNG dùng input() hay bất cứ tương tác I/O nào có thể làm treo terminal.
-5. Script không được quá dài phải cô đọng, tự chứa và có thể chạy được ngay lập tức ở thư mục gốc của dự án.
+2. CHIẾN THUẬT 1 (Ưu tiên): Nếu trong stack trace có file chạy (entry-point script) KHÔNG yêu cầu nhập liệu I/O (không có `input()`, không đòi `sys.argv`) và có sẵn kịch bản (scenario), HÃY chạy thẳng file đó bằng `subprocess.run` (dùng `python -m` nếu cần) hoặc import trực tiếp.
+3. CHIẾN THUẬT 2 (Bắt buộc dùng Mock Data): Nếu file chạy có chứa I/O hoặc phụ thuộc dữ liệu ngoài phức tạp, BỎ QUA file chạy đó. Hãy tiến thẳng vào lớp bên trong, import trực tiếp hàm/class bị lỗi và truyền dữ liệu giả (mock data) để kích hoạt lỗi.
+4. TUYỆT ĐỐI KHÔNG dùng `input()` thực tế trong script của bạn vì sẽ làm treo terminal.
+5. Script không được quá dài, phải cô đọng, tự chứa và chạy được ngay ở thư mục gốc của dự án.
 """
 
         if ctx.state.repro_retry_count > 0:

@@ -91,8 +91,8 @@ PLANNER_PROMPT = textwrap.dedent("""\
       CHỈ gọi khi dữ liệu thật sự không thể suy luận từ code hay log.
 
     QUY TRÌNH SUY NGHĨ BẮT BUỘC (CHAIN OF THOUGHT):
-    TRƯỚC KHI TRẢ VỀ JSON, BẠN PHẢI viết ra một khối `<thinking>...</thinking>`.
-    Trong đó phải trả lời lần lượt các câu hỏi sau:
+    TRƯỚC KHI GỌI BẤT KỲ TOOL NÀO (như read_file, search_in_codebase, v.v...) VÀ TRƯỚC KHI TRẢ VỀ JSON, BẠN PHẢI in ra một đoạn văn bản (text) giải thích lý do tại sao bạn lại chọn hành động đó.
+    Đặc biệt, trước khi trả về PlanWrapper, bạn phải viết một khối `<thinking>...</thinking>` trả lời các câu hỏi sau:
     1. Traceback chỉ ra điểm crash ở đâu (file, dòng, hàm)?
     2. Tôi đã đọc code tại điểm đó và các caller xác định điều gì?
     3. Nguyên nhân gốc rễ (Root Cause) chính xác là gì? Tại sao nó xảy ra?
@@ -100,7 +100,7 @@ PLANNER_PROMPT = textwrap.dedent("""\
     5. Tôi sẽ thiết kế Plan như thế nào? Thứ tự các bước là gì?
 
     QUY TRÌNH THỰC THI:
-    1. Dùng `read_file` đọc các file trong `stack_trace` (truyền start_line, end_line) để nắm rõ code.
+    1. SUY NGHĨ: Giải thích lý do chọn file để đọc. Sau đó dùng `read_file` đọc các file trong `stack_trace` để nắm rõ code.
     2. Trước DATA-DRIVEN BUG: Nếu là data_driven_runtime và chưa rõ schema data thực tế:
        a. Dùng `search_in_codebase` truy về nguồn gốc tạo ra data payload.
        b. Nếu vẫn không rõ, dùng `ask_human` hỏi Dev trực tiếp.
