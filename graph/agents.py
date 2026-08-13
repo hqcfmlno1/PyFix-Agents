@@ -10,7 +10,8 @@ from pydantic_ai.mcp import MCPToolset
 from pydantic_ai.tools import Tool
 
 from graph.config import MCP_SERVER_URL, model, BOLD, CYAN, RESET
-from graph.config import analyzer_model, planner_model, coder_model, ANALYZER_MODEL_NAME, PLANNER_MODEL_NAME, CODER_MODEL_NAME
+from graph.config import analyzer_model, planner_model, coder_model, repro_model
+from graph.config import ANALYZER_MODEL_NAME, PLANNER_MODEL_NAME, CODER_MODEL_NAME, REPRO_MODEL_NAME
 from graph.models import BugExplanation, BugReport, CodeFix, PlanWrapper
 from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
 
@@ -30,34 +31,45 @@ async def patched_agent_run(self, *args, **kwargs):
 
 Agent.run = patched_agent_run
 
-# ── Monkey-patch Model.request để in nội dung suy nghĩ (TextPart) ────────────
+# ── Monkey-patch Model.request để in nội dung suy nghĩ Real-time ────────────
 import types
 from pydantic_ai.messages import ModelResponse, TextPart
+try:
+    from pydantic_ai.messages import ThinkingPart
+except ImportError:
+    ThinkingPart = None
 
-def patch_model_request(model_instance):
-    if not model_instance: return
-    original_request = getattr(model_instance, 'request', None)
-    if not original_request: return
-    
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.google import GoogleModel
+
+def inject_realtime_logging(original_request_method):
     async def patched_request(self, *args, **kwargs):
-        result = await original_request(*args, **kwargs)
-        # result is (ModelResponse, Usage)
+        result = await original_request_method(self, *args, **kwargs)
+        
+        # Pydantic AI versions differ: some return (ModelResponse, Usage), some return ModelResponse directly.
+        response = None
         if isinstance(result, tuple) and len(result) >= 1:
             response = result[0]
-            if isinstance(response, ModelResponse):
-                agent_name = current_agent_name.get()
-                for part in response.parts:
-                    if isinstance(part, TextPart) and part.content.strip():
-                        from graph.config import BOLD, MAGENTA, RESET
-                        print(f"\n  {BOLD}{MAGENTA}🧠 [{agent_name}] SUY NGHĨ:{RESET}")
-                        print(f"  {MAGENTA}{part.content.strip()}{RESET}")
+        elif isinstance(result, ModelResponse):
+            response = result
+            
+        if response and getattr(response, 'parts', None):
+            agent_name = current_agent_name.get()
+            for part in response.parts:
+                if isinstance(part, TextPart) and part.content.strip():
+                    from graph.config import BOLD, MAGENTA, RESET
+                    print(f"\n  {BOLD}{MAGENTA}💬 [{agent_name}] LÝ DO:{RESET}")
+                    print(f"  {MAGENTA}{part.content.strip()}{RESET}")
+                elif ThinkingPart and isinstance(part, ThinkingPart) and part.content.strip():
+                    from graph.config import BOLD, MAGENTA, RESET
+                    print(f"\n  {BOLD}{MAGENTA}🧠 [{agent_name}] SUY NGHĨ:{RESET}")
+                    print(f"  {MAGENTA}{part.content.strip()}{RESET}")
         return result
-        
-    model_instance.request = types.MethodType(patched_request, model_instance)
+    return patched_request
 
-patch_model_request(analyzer_model)
-patch_model_request(planner_model)
-patch_model_request(coder_model)
+OpenAIChatModel.request = inject_realtime_logging(OpenAIChatModel.request)
+GoogleModel.request = inject_realtime_logging(GoogleModel.request)
+
 
 # ── Monkey-patch MCPToolset để in log khi gọi tool ───────────────────────────
 original_call_tool = MCPToolset.call_tool
@@ -128,7 +140,7 @@ input_analyzer_agent: Agent[None, BugReport] = Agent(
 
 # ── Lập Kế Hoạch & Suy Luận ──────────────────────────────────────────
 planner_agent: Agent[None, PlanWrapper] = Agent(
-    coder_model,  # DeepSeek-R1 thinking=high
+    planner_model,  
     name="Planner",
     output_type=PlanWrapper,
     system_prompt=PLANNER_PROMPT,
@@ -139,7 +151,7 @@ planner_agent: Agent[None, PlanWrapper] = Agent(
 
 # ── Viết Kịch Bản Tái Hiện (Reproduction) ───────────────────────────
 repro_agent: Agent[None, str] = Agent(
-    coder_model,  
+    repro_model,  # DeepSeek-R1-0528 — reasoning mạnh, viết repro chính xác
     name="Reproduction Agent",
     output_type=str,
     system_prompt="Bạn là một Software Engineer / QA chuyên nghiệp. Nhiệm vụ của bạn là viết kịch bản Python độc lập (Reproduction Script) để tái hiện chính xác lỗi dựa trên Traceback được cung cấp.",
