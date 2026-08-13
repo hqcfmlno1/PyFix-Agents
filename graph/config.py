@@ -47,18 +47,24 @@ deepseek_provider = OpenAIProvider(base_url='https://api.deepinfra.com/v1/openai
 ANALYZER_MODEL_NAME = "gemma-4-31b-it"
 analyzer_model = GoogleModel(ANALYZER_MODEL_NAME, provider=google_provider)
 
-# Planner: DeepSeek-R1 với Thinking Mode — phân tích sâu, tìm root cause
-PLANNER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
-#PLANNER_MODEL_NAME = "google/gemma-4-31B-it"
+# Planner: GPT-OSS-120B — native ThinkingPart, reasoning mạnh, tool calling tốt
+PLANNER_MODEL_NAME = "openai/gpt-oss-120b"
 planner_model = OpenAIChatModel(
     PLANNER_MODEL_NAME,
     provider=deepseek_provider,
     settings=ModelSettings(thinking="high"),
 )
 
+# Repro Agent: GPT-OSS-120B — reasoning mạnh, viết repro chính xác
+REPRO_MODEL_NAME = "openai/gpt-oss-120b"
+repro_model = OpenAIChatModel(
+    REPRO_MODEL_NAME,
+    provider=deepseek_provider,
+    settings=ModelSettings(thinking="high"),
+)
 
-#CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
-CODER_MODEL_NAME = "google/gemma-4-31B-it"
+CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+# CODER_MODEL_NAME = "google/gemma-4-31B-it"
 coder_model = OpenAIChatModel(CODER_MODEL_NAME, provider=deepseek_provider)
 
 # Backward compat — một số nơi vẫn import `model` và `MODEL_NAME` chung
@@ -78,5 +84,6 @@ GREEN = "\033[92m"
 RED = "\033[91m"
 YELLOW = "\033[93m"
 CYAN = "\033[96m"
+MAGENTA = "\033[95m"
 BOLD = "\033[1m"
 RESET = "\033[0m"

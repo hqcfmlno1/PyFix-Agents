@@ -12,7 +12,7 @@ from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import planner_agent
 from graph.config import BOLD, CYAN, PLANNER_MODEL_NAME, RED, RESET
-from graph.helpers import print_step
+from graph.helpers import print_step, print_agent_thinking
 from graph.models import BugFixState, PlanWrapper, BugType
 from graph.prompts import PLAN_TEMPLATES
 
@@ -91,7 +91,7 @@ Hãy thận trọng hơn khi đọc code và KHÔNG đưa ra giả định.
         try:
             result = await planner_agent.run(prompt)
             output: PlanWrapper = result.output
-            
+
             # Cập nhật Metrics
             from graph.helpers import count_tool_calls
             ctx.state.metrics_planner_tool_calls += count_tool_calls(result.new_messages())

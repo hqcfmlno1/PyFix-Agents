@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 from pydantic_graph import BaseNode, GraphRunContext
 
 from graph.agents import repro_agent
-from graph.config import BOLD, CYAN, PLANNER_MODEL_NAME, RED, RESET, YELLOW
-from graph.helpers import print_step
+from graph.config import BOLD, CYAN, REPRO_MODEL_NAME, RED, RESET, YELLOW
+from graph.helpers import print_step, print_agent_thinking
 from graph.models import BugFixState
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ class ReproductionPlanNode(BaseNode[BugFixState]):
         from graph.nodes.reproduction_run import ReproductionRunNode
         from graph.nodes.planning import PlanningNode
 
-        print_step("🧪", "Reproduction Plan", f"Đang yêu cầu {PLANNER_MODEL_NAME} viết kịch bản tái hiện lỗi...")
+        print_step("🧪", "Reproduction Plan", f"Đang yêu cầu {REPRO_MODEL_NAME} viết kịch bản tái hiện lỗi...")
 
         prompt = f"""NHIỆM VỤ: Viết một Python script ngắn gọn để tái hiện lỗi sau:
 - Exception: {ctx.state.error_class}: {ctx.state.error_message}

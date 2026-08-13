@@ -203,3 +203,44 @@ def count_tool_calls(messages: list) -> int:
                     count += 1
     return count
 
+
+def print_agent_thinking(result, agent_name: str = "AGENT") -> None:
+    """
+    Duyệt result.all_messages() và in ThinkingPart / TextPart xuất hiện
+    trong cùng turn với ToolCallPart (tức là suy nghĩ trước khi gọi tool).
+    Gọi hàm này ngay SAU agent.run() để hiển thị Chain-of-Thought.
+    """
+    try:
+        from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+        try:
+            from pydantic_ai.messages import ThinkingPart
+        except ImportError:
+            ThinkingPart = None
+
+        from graph.config import BOLD, MAGENTA, RESET
+
+        for msg in result.all_messages():
+            if not isinstance(msg, ModelResponse):
+                continue
+            parts = getattr(msg, 'parts', [])
+            has_tool_call = any(isinstance(p, ToolCallPart) for p in parts)
+            if not has_tool_call:
+                continue
+
+            for part in parts:
+                if ThinkingPart and isinstance(part, ThinkingPart) and part.content.strip():
+                    print(f"\n  {BOLD}{MAGENTA}🧠 [{agent_name}] SUY NGHĨ (Native Thinking):{RESET}")
+                    # Giới hạn 1000 ký tự để không làm rối terminal
+                    content = part.content.strip()
+                    if len(content) > 1000:
+                        content = content[:1000] + "\n  ...(truncated)"
+                    print(f"  {MAGENTA}{content}{RESET}")
+                elif isinstance(part, TextPart) and part.content.strip():
+                    print(f"\n  {BOLD}{MAGENTA}💬 [{agent_name}] LÝ DO:{RESET}")
+                    content = part.content.strip()
+                    if len(content) > 500:
+                        content = content[:500] + "\n  ...(truncated)"
+                    print(f"  {MAGENTA}{content}{RESET}")
+    except Exception:
+        pass  # Không để lỗi UX phá vỡ luồng chính
+
