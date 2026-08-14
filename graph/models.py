@@ -74,42 +74,6 @@ class PlanWrapper(BaseModel):
     steps: List[PlanStep] = Field(description="Danh sách các bước thực thi")
 
 
-# ── Patch Hunk (Search-and-Replace Patch) ────────────────────────────────────
-class PatchHunk(BaseModel):
-    """
-    Một đoạn sửa đổi cụ thể trong file theo cơ chế Search-and-Replace.
-    Không phụ thuộc vào số dòng — tránh hoàn toàn vấn đề Line Drift khi áp dụng nhiều bước.
-    """
-    old_lines: str = Field(
-        description=(
-            "Đoạn code gốc cần tìm và thay thế. "
-            "PHẢI khớp chính xác từng ký tự (kể cả khoảng trắng, indentation) với nội dung file hiện tại. "
-            "Nên bao gồm đủ context (2-3 dòng xung quanh) để đảm bảo tính duy nhất trong file."
-        )
-    )
-    new_lines: str = Field(
-        description=(
-            "Nội dung mới thay thế cho old_lines. "
-            "Giữ nguyên indentation Python. Nếu muốn xóa đoạn code, để chuỗi rỗng."
-        )
-    )
-    hunk_explanation: str = Field(default="", description="Giải thích ngắn gọn tại sao cần thay đổi đoạn này")
-
-
-# ── Code Fix ─────────────────────────────────────────────────────────────────
-class SingleFileFix(BaseModel):
-    """Chi tiết sửa đổi cho một file cụ thể — Dùng danh sách PatchHunk (search-and-replace) thay vì toàn bộ nội dung file."""
-    target_file: str = Field(description="Đường dẫn tương đối của file cần sửa")
-    hunks: List[PatchHunk] = Field(default_factory=list, description="Danh sách các đoạn sửa đổi (PatchHunk), mỗi hunk chứa old_lines và new_lines")
-    changes_summary: str = Field(description="Tóm tắt tổng quan những thay đổi trong file này")
-
-
-class CodeFix(BaseModel):
-    """Output từ Coder Agent."""
-    file: SingleFileFix = Field(description="Chi tiết sửa đổi cho file")
-    explanation: str = Field(description="Giải thích nguyên nhân gốc rễ và giải pháp")
-
-
 # ── Bug Explanation (Cho lỗi Simple) ─────────────────────────────────────────
 class BugExplanation(BaseModel):
     """Output chẩn đoán lỗi từ Coder Agent cho Phase 1 của lỗi Simple."""
@@ -130,6 +94,17 @@ class IterationContext(BaseModel):
     target_files: List[str] = Field(default_factory=list, description="Các file đã sửa")
     patch_summary: str = Field(description="Tóm tắt nội dung patch")
     user_feedback: str = Field(default="", description="Phản hồi/lỗi mới từ người dùng")
+
+
+# ── CodeFix (Internal State) ────────────────────────────────────────────────
+class CodeFix(BaseModel):
+    """
+    State nội bộ: Lưu trữ patch đã được Coder Agent (trả về dưới dạng str thô)
+    áp dụng thành công vào file. Không dùng làm Output Schema cho Agent nữa.
+    """
+    target_file: str
+    patch_blocks: str
+    explanation: str = ""
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -181,7 +156,7 @@ class BugFixState(BaseModel):
     # ── Phase 4: Execution ──────────────────────────────────────────────────
     step_max_retries: int = MAX_RETRY
     files_context: Dict[str, str] = Field(default_factory=dict)
-    final_fixes: List[SingleFileFix] = Field(default_factory=list)
+    final_fixes: List[CodeFix] = Field(default_factory=list)
     final_explanation: str = ""
     execution_logs: List[str] = Field(default_factory=list)
     applied_diffs_history: List[Dict] = Field(default_factory=list)

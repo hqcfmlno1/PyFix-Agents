@@ -52,7 +52,7 @@ PLANNER_MODEL_NAME = "openai/gpt-oss-120b"
 planner_model = OpenAIChatModel(
     PLANNER_MODEL_NAME,
     provider=deepseek_provider,
-    settings=ModelSettings(thinking="high"),
+    settings=ModelSettings(thinking="medium"),
 )
 
 # Repro Agent: GPT-OSS-120B — reasoning mạnh, viết repro chính xác
@@ -60,11 +60,11 @@ REPRO_MODEL_NAME = "openai/gpt-oss-120b"
 repro_model = OpenAIChatModel(
     REPRO_MODEL_NAME,
     provider=deepseek_provider,
-    settings=ModelSettings(thinking="high"),
+    settings=ModelSettings(thinking="medium"),
 )
 
-CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
-# CODER_MODEL_NAME = "google/gemma-4-31B-it"
+#CODER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
+CODER_MODEL_NAME = "google/gemma-4-31B-it"
 coder_model = OpenAIChatModel(CODER_MODEL_NAME, provider=deepseek_provider)
 
 # Backward compat — một số nơi vẫn import `model` và `MODEL_NAME` chung

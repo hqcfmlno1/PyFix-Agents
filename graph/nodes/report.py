@@ -26,14 +26,8 @@ class ReportNode(BaseNode[BugFixState]):
             lines.append("Các file đã được chỉnh sửa:")
             for ffix in ctx.state.final_fixes:
                 lines.append(f"  • {ffix.target_file}")
-                if hasattr(ffix, 'hunks') and ffix.hunks:
-                    for hunk in ffix.hunks:
-                        if hunk.old_lines:
-                            for line in hunk.old_lines.splitlines():
-                                lines.append(f"    - {line}")
-                        if hunk.new_lines:
-                            for line in hunk.new_lines.splitlines():
-                                lines.append(f"    + {line}")
+                if ffix.explanation:
+                    lines.append(f"    → {ffix.explanation[:120]}")
         elif not ctx.state.want_apply:
             lines.append("Chế độ: Chỉ tư vấn (không sửa file).")
         else:

@@ -86,6 +86,16 @@ Hãy thận trọng hơn khi đọc code và KHÔNG đưa ra giả định.
                     prompt += f"\n{template}\n"
                     break  # Ưu tiên lấy template của loại lỗi đầu tiên tìm thấy
 
+        # Gợi ý sửa từ người dùng (sau khi validate thành công nhưng muốn đổi cách sửa)
+        if ctx.state.user_suggested_fix:
+            prompt += (
+                f"\nGỢI Ý CÁCH SỬA TỪ NGƯỜI DÙNG (ƯU TIÊN CAO — BẮT BUỘC TUÂN THEO):\n"
+                f"  → {ctx.state.user_suggested_fix}\n"
+                f"Lưu ý: Người dùng đã xem bản vá trước và chủ động đề xuất hướng sửa này. "
+                f"Plan mới PHẢI bám sát gợi ý của họ, KHÔNG được phớt lờ hoặc đề xuất hướng khác "
+                f"trừ khi gợi ý đó không khả thi về mặt kỹ thuật sau khi đọc code.\n"
+            )
+
         prompt += "\nLỆNH: Dùng tool `read_file` đọc code tại các điểm crash. Viết khối <thinking> phân tích nguyên nhân gốc rễ, sau đó trả về PlanWrapper chi tiết tuân theo KHUNG KẾ HOẠCH ở trên."
 
         try:
