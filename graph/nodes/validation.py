@@ -87,7 +87,7 @@ class ValidationNode(BaseNode[BugFixState]):
         target_files = []
         for ffix in ctx.state.final_fixes:
             target_files.append(ffix.target_file)
-            patch_summary += f"{ffix.target_file}: {ffix.changes_summary}\n"
+            patch_summary += f"{ffix.target_file}: {ffix.explanation}\n"
         
         from graph.models import IterationContext
         ctx.state.iteration_history.append(

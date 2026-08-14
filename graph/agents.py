@@ -12,7 +12,7 @@ from pydantic_ai.tools import Tool
 from graph.config import MCP_SERVER_URL, model, BOLD, CYAN, RESET
 from graph.config import analyzer_model, planner_model, coder_model, repro_model
 from graph.config import ANALYZER_MODEL_NAME, PLANNER_MODEL_NAME, CODER_MODEL_NAME, REPRO_MODEL_NAME
-from graph.models import BugExplanation, BugReport, CodeFix, PlanWrapper
+from graph.models import BugExplanation, BugReport, PlanWrapper
 from graph.prompts import CODER_PROMPT, INPUT_ANALYZER_PROMPT, PLANNER_PROMPT
 
 import contextvars
@@ -56,11 +56,7 @@ def inject_realtime_logging(original_request_method):
         if response and getattr(response, 'parts', None):
             agent_name = current_agent_name.get()
             for part in response.parts:
-                if isinstance(part, TextPart) and part.content.strip():
-                    from graph.config import BOLD, MAGENTA, RESET
-                    print(f"\n  {BOLD}{MAGENTA}💬 [{agent_name}] LÝ DO:{RESET}")
-                    print(f"  {MAGENTA}{part.content.strip()}{RESET}")
-                elif ThinkingPart and isinstance(part, ThinkingPart) and part.content.strip():
+                if ThinkingPart and isinstance(part, ThinkingPart) and part.content.strip():
                     from graph.config import BOLD, MAGENTA, RESET
                     print(f"\n  {BOLD}{MAGENTA}🧠 [{agent_name}] SUY NGHĨ:{RESET}")
                     print(f"  {MAGENTA}{part.content.strip()}{RESET}")
@@ -131,7 +127,7 @@ ask_human_tool = Tool(_ask_human_sync, name="ask_human")
 
 # ── Agent Definitions ────────────────────────────────────────────────────────
 input_analyzer_agent: Agent[None, BugReport] = Agent(
-    coder_model,  # Gemma — nhẹ, nhanh
+    analyzer_model,  # Gemma — nhẹ, nhanh
     name="Input Analyzer",
     output_type=BugReport,
     system_prompt=INPUT_ANALYZER_PROMPT,
@@ -161,11 +157,11 @@ repro_agent: Agent[None, str] = Agent(
 
 from typing import Union
 
-# Coder — DeepSeek-V3 (không thinking): viết code nhanh, xuất JSON chẳt chẽ
-coder_agent: Agent[None, Union[BugExplanation, CodeFix]] = Agent(
+# Coder — DeepSeek-V3 (không thinking): viết code nhanh, xuất text thô cho patch
+coder_agent: Agent[None, Union[BugExplanation, str]] = Agent(
     coder_model,
     name="Coder Agent",
-    output_type=Union[BugExplanation, CodeFix],
+    output_type=Union[BugExplanation, str],
     system_prompt=CODER_PROMPT,
     toolsets=[mcp_toolset_coder],
     retries=2,

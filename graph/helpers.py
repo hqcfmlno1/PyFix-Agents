@@ -9,7 +9,7 @@ import os
 from typing import List
 
 from graph.config import BOLD, CYAN, GREEN, RED, RESET, YELLOW
-from graph.models import PatchHunk, PlanStep
+from graph.models import PlanStep
 from typing import Optional
 
 def _count_lines(filepath: str) -> Optional[int]:
@@ -137,60 +137,51 @@ def load_file_content(path: str) -> str:
         return ""
 
 
-def apply_hunk(file_content: str, hunk: PatchHunk) -> tuple[bool, str]:
+def parse_delimiter_blocks(patch_text: str) -> list[tuple[str, str]]:
     """
-    Áp dụng một PatchHunk vào nội dung file bằng cơ chế Search-and-Replace.
+    Dùng regex bóc tách tất cả cặp (search_block, replace_block)
+    từ chuỗi định dạng Delimiter Blocks.
+    Returns: list[tuple[search, replace]]
+    """
+    import re
+    pattern = r"<<<<<<< SEARCH\n(.*?)\n=======\n(.*?)\n>>>>>>> REPLACE"
+    matches = re.findall(pattern, patch_text, re.DOTALL)
+    return matches  # [(search1, replace1), (search2, replace2), ...]
+
+
+def apply_delimiter_patch(file_content: str, patch_text: str) -> tuple[bool, str, List[str]]:
+    """
+    Áp dụng tuần tự tất cả delimiter blocks vào nội dung file.
+    Dùng str.replace() thuần túy — không cần exact JSON escaping.
 
     Returns:
-        (True, new_content)  nếu thành công.
-        (False, error_msg)   nếu thất bại:
-            - NOT_FOUND   : old_lines không tồn tại trong file.
-            - AMBIGUOUS   : old_lines xuất hiện nhiều lần (thiếu context).
+        (True, final_content, [])         nếu thành công
+        (False, partial_content, errors)  nếu thất bại
     """
-    occurrences = file_content.count(hunk.old_lines)
+    blocks = parse_delimiter_blocks(patch_text)
+    if not blocks:
+        return False, file_content, ["Không tìm thấy block SEARCH/REPLACE nào trong patch_blocks"]
 
-    if occurrences == 0:
-        return False, (
-            f"NOT_FOUND: old_lines không khớp với nội dung file hiện tại.\n"
-            f"  old_lines gửi lên:\n{hunk.old_lines!r}"
-        )
-
-    if occurrences > 1:
-        return False, (
-            f"AMBIGUOUS: old_lines xuất hiện {occurrences} lần trong file. "
-            f"Cần thêm context để xác định duy nhất vị trí cần sửa."
-        )
-
-    new_content = file_content.replace(hunk.old_lines, hunk.new_lines, 1)
-    return True, new_content
-
-
-def apply_all_hunks(original_content: str, hunks: List[PatchHunk]) -> tuple[bool, str, List[str]]:
-    """
-    Áp dụng tuần tự danh sách PatchHunk vào nội dung file.
-    Mỗi hunk được áp dụng lên kết quả của hunk trước (nội dung đã được cập nhật).
-
-    Returns:
-        (success, final_content_or_partial, errors)
-        - Nếu thành công: (True, nội_dung_sau_patch, [])
-        - Nếu có lỗi   : (False, nội_dung_tại_thời_điểm_lỗi, [danh_sách_lỗi])
-    """
-    if not hunks:
-        return True, original_content, []
-
-    current = original_content
+    current = file_content
     errors: List[str] = []
 
-    for i, hunk in enumerate(hunks, start=1):
-        success, result = apply_hunk(current, hunk)
-        if success:
-            current = result
-        else:
-            errors.append(f"Hunk #{i} thất bại: {result}")
-            # Dừng sớm khi gặp lỗi để không áp dụng các hunk phụ thuộc sai lên trên
+    for i, (search, replace) in enumerate(blocks, start=1):
+        occurrences = current.count(search)
+        if occurrences == 0:
+            errors.append(
+                f"Block #{i}: NOT_FOUND — search_block không khớp với nội dung file.\n"
+                f"  search_block gửi lên:\n{search!r}"
+            )
             return False, current, errors
+        if occurrences > 1:
+            errors.append(
+                f"Block #{i}: AMBIGUOUS — search_block xuất hiện {occurrences} lần. "
+                f"Cần thêm context để xác định duy nhất vị trí cần sửa."
+            )
+            return False, current, errors
+        current = current.replace(search, replace, 1)
 
-    return True, current, errors
+    return True, current, []
 
 def count_tool_calls(messages: list) -> int:
     """Đếm số lượng ToolCallPart trong danh sách các messages từ LLM."""

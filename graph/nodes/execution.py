@@ -15,14 +15,14 @@ from pydantic_graph import BaseNode, GraphRunContext
 from graph.agents import coder_agent
 from graph.config import BOLD, CODER_MODEL_NAME, CYAN, GREEN, RED, RESET, YELLOW
 from graph.helpers import (
-    apply_all_hunks,
+    apply_delimiter_patch,
     compute_diff,
     load_file_content,
     print_diff,
     print_step,
     resolve_target_path,
 )
-from graph.models import BugFixState, CodeFix, PlanStep, SingleFileFix
+from graph.models import BugFixState, PlanStep, CodeFix
 
 if TYPE_CHECKING:
     from graph.nodes.validation import ValidationNode
@@ -34,8 +34,8 @@ class ExecutionNode(BaseNode[BugFixState]):
     [Agent] Thực thi từng bước trong Plan theo cơ chế Per-Step Human Approval.
 
     Luồng tại mỗi step:
-    1. Coder Agent đọc file và tạo hunks.
-    2. Áp dụng hunks tạm vào bộ nhớ (current_contents).
+    1. Coder Agent đọc file và tạo patch_blocks.
+    2. Áp dụng patch tạm vào bộ nhớ (current_contents).
     3. Hiển thị diff của step đó cho Dev.
     4. Hỏi Dev: [y] Accept → ghi file thật / [n] Reject (kèm lý do) → Coder retry step / [q] Thoát.
     5. Nếu step bị reject > step_max_retries lần → trigger replan.
@@ -103,7 +103,7 @@ class ExecutionNode(BaseNode[BugFixState]):
                 PlanStep(
                     step_id=1,
                     title=f"Sửa lỗi: {ctx.state.error_class} tại {ctx.state.target_file}:{ctx.state.error_line}",
-                    description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về CodeFix chứa các hunks để sửa lỗi này.",
+                    description="LỆNH: TẠO PATCH. Dựa vào kết quả chẩn đoán ở trên, hãy trả về trực tiếp đoạn text chứa định dạng Delimiter Blocks.",
                     target_file=ctx.state.target_file or "main.py",
                 )
             ]
@@ -137,7 +137,7 @@ class ExecutionNode(BaseNode[BugFixState]):
                     last_errors = "\n".join(f"  • {e}" for e in ctx.state.execution_logs[-3:])
                     prev_step_errors = f"\nLỖI TỪ LẦN THỬ TRƯỚC:\n{last_errors}\nHãy điều chỉnh để vượt qua lỗi này."
 
-                step_prompt = f"""LỆNH: TẠO PATCH (SEARCH-AND-REPLACE)
+                step_prompt = f"""LỆNH: TẠO PATCH (DELIMITER BLOCKS)
 
 NHIỆM VỤ: {step.title}
 FILE CẦN SỬA: {step.target_file}
@@ -153,14 +153,14 @@ HƯỚNG DẪN THỰC THI:
 1. QUYẾT ĐỊNH ĐỌC FILE:
    - Nhìn vào Cấu trúc thư mục (thấy số lines), nếu file < 200 lines, hãy dùng tool `read_file(path='{step.target_file}')` đọc toàn bộ.
    - Nếu file > 200 lines và chưa rõ dòng cần sửa, BẮT BUỘC dùng `search_in_codebase(query="...", files=["{step.target_file}"])` để tìm số dòng. Sau đó mới dùng `read_file(start_line=..., end_line=...)` đọc vùng code đó.
-2. Xác định chính xác đoạn code cần sửa, COPY NGUYÊN VĂN vào `old_lines` (bao gồm 2-3 dòng context xung quanh để đảm bảo TÍNH DUY NHẤT).
-3. Viết `new_lines` thay thế — giữ nguyên indentation y hệt file gốc.
-4. BẮT BUỘC trả về CodeFix với `file` chứa ÍT NHẤT 1 hunk. TUYỆT ĐỐI KHÔNG trả về hunks=[] rỗng.
+2. Xác định chính xác đoạn code cần sửa, trả về TRỰC TIẾP định dạng Delimiter Blocks.
+3. TUYỆT ĐỐI KHÔNG xuất ra bất kỳ text nào khác ngoài các block SEARCH/REPLACE.
 
 QUY TẮC QUAN TRỌNG:
-- old_lines PHẢI khớp chính xác với nội dung file (kể cả khoảng trắng và indentation).
-- Nếu muốn xóa code, để new_lines là chuỗi rỗng.
-- Nếu muốn thêm code mới (không xóa gì), dùng old_lines là đoạn đứng ngay trước vị trí chèn và new_lines = old_lines + code_mới.
+- KHÔNG sử dụng block code markdown (không bọc trong ```python ... ```).
+- KHÔNG giải thích.
+- SEARCH block PHẢI khớp chính xác 100% với nội dung file (kể cả khoảng trắng, indentation, dấu ngoặc).
+- BẮT BUỘC trả về ÍT NHẤT 1 block.
 """
 
                 try:
@@ -181,43 +181,47 @@ QUY TẮC QUAN TRỌNG:
                     step_fix = result.output
 
                     # ── Debug: Hiển thị output thực tế từ Coder ──────────
-                    if not isinstance(step_fix, CodeFix):
+                    # ── Validate: Reject empty patch_blocks ─────────────
+                    if isinstance(step_fix, str):
+                        if not step_fix.strip():
+                            raise ValueError(
+                                f"Model trả về chuỗi rỗng. Không sinh được patch. Retry..."
+                            )
+                        # Bọc chuỗi text thô vào object CodeFix nội bộ
+                        step_fix = CodeFix(
+                            target_file=step.target_file,
+                            patch_blocks=step_fix,
+                            explanation="Áp dụng patch từ raw text",
+                        )
+                    elif not isinstance(step_fix, CodeFix):
                         print_step("🔍", "DEBUG", f"Coder trả về kiểu: {type(step_fix).__name__}")
                         if hasattr(step_fix, 'explanation'):
                             print(f"  Explanation: {step_fix.explanation[:200]}")
-                        raise ValueError(f"Agent không trả về CodeFix mà trả về {type(step_fix).__name__}.")
-
-                    # ── Validate: Reject empty files/hunks ──────────────
-                    if not step_fix.file.hunks:
-                        raise ValueError(
-                            f"CodeFix có hunks=[] rỗng (explanation='{step_fix.explanation[:100]}'). "
-                            f"Model không sinh được hunks. Retry..."
-                        )
+                        raise ValueError(f"Agent không trả về str mà trả về {type(step_fix).__name__}.")
 
                     # Debug: kiểm tra nội dung CodeFix
-                    print_step("🔍", "DEBUG", f"CodeFix: file {step_fix.file.target_file}, explanation='{step_fix.explanation[:100]}...'")
-                    print(f"  File: {step_fix.file.target_file}, {len(step_fix.file.hunks)} hunk(s)")
-                    for hi, h in enumerate(step_fix.file.hunks):
-                        print(f"    Hunk[{hi}]: old_lines={repr(h.old_lines[:80])}..., new_lines={repr(h.new_lines[:80])}...")
+                    print_step("🔍", "DEBUG", f"Patch (text thô): {len(step_fix.patch_blocks)} ký tự.")
+                    blocks_preview = step_fix.patch_blocks[:200].replace('\n', ' | ')
+                    print(f"  patch_blocks preview: {blocks_preview}...")
 
-                    # Áp dụng hunks vào current_contents (chưa ghi file thật)
+                    # Áp dụng delimiter patch vào current_contents (chưa ghi file thật)
                     step_patched_files: dict[str, str] = {}
                     patch_errors: list[str] = []
 
-                    ffix = step_fix.file
+                    ffix = step_fix
                     abs_p = resolve_target_path(ffix.target_file, ctx.state.repo_path)
                     if abs_p not in original_backups:
                         original_backups[abs_p] = load_file_content(abs_p)
                         current_contents[abs_p] = original_backups[abs_p]
 
-                    if ffix.hunks:
-                        success, patched, errors = apply_all_hunks(current_contents[abs_p], ffix.hunks)
+                    if ffix.patch_blocks.strip():
+                        success, patched, errors = apply_delimiter_patch(current_contents[abs_p], ffix.patch_blocks)
                         if success:
                             step_patched_files[abs_p] = patched
                         else:
                             patch_errors.extend(errors)
                     else:
-                        print_step("⚠", f"Bước {idx}", f"Không có hunk nào cho {ffix.target_file}")
+                        print_step("⚠", f"Bước {idx}", f"Không có patch_blocks cho {ffix.target_file}")
 
                     if patch_errors:
                         error_summary = "\n".join(patch_errors)
@@ -239,12 +243,12 @@ QUY TẮC QUAN TRỌNG:
                     if not step_patched_files:
                         print_step("⚠", f"Bước {idx}", "Coder không trả về thay đổi nào.")
                         step_retry += 1
-                        ctx.state.execution_logs.append(f"Bước {idx}: Coder không tạo được hunks hợp lệ.")
+                        ctx.state.execution_logs.append(f"Bước {idx}: Coder không tạo được patch_blocks hợp lệ.")
                         if step_retry > ctx.state.step_max_retries:
                             print_step("❌", f"Bước {idx}", f"{RED}Vượt quá {ctx.state.step_max_retries} lần retry. Trigger replan.{RESET}")
                             self._rollback(original_backups, committed_files)
                             ctx.state.user_plan_feedback = (
-                                f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần thử: Coder không tạo được hunks hợp lệ."
+                                f"Bước {idx} ({step.title}) thất bại sau {step_retry} lần thử: Coder không tạo được patch hợp lệ."
                             )
                             ctx.state.replan_count += 1
                             return ValidationNode()
@@ -349,14 +353,14 @@ QUY TẮC QUAN TRỌNG:
                         sys.exit(0)
 
         # ── Tất cả bước đã được chấp nhận ───────────────────────────────────
-        final_files: List[SingleFileFix] = []
+        final_files: List[CodeFix] = []
         for abs_p in committed_files:
             rel_p = os.path.relpath(abs_p, ctx.state.repo_path)
             final_files.append(
-                SingleFileFix(
+                CodeFix(
                     target_file=rel_p,
-                    hunks=[],
-                    changes_summary="Đã áp dụng và được Dev chấp nhận.",
+                    patch_blocks="",  # Đã áp dụng thành công, không cần lưu lại blocks
+                    explanation="Đã áp dụng và được Dev chấp nhận.",
                 )
             )
 
