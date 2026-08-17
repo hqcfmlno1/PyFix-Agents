@@ -147,17 +147,16 @@ planner_agent: Agent[None, PlanWrapper] = Agent(
 
 # ── Viết Kịch Bản Tái Hiện (Reproduction) ───────────────────────────
 repro_agent: Agent[None, str] = Agent(
-    repro_model,  # DeepSeek-R1-0528 — reasoning mạnh, viết repro chính xác
+    repro_model,  
     name="Reproduction Agent",
     output_type=str,
     system_prompt="Bạn là một Software Engineer / QA chuyên nghiệp. Nhiệm vụ của bạn là viết kịch bản Python độc lập (Reproduction Script) để tái hiện chính xác lỗi dựa trên Traceback được cung cấp.",
     toolsets=[mcp_toolset_planner],
-    retries=2,
+    retries=4,
 )
 
 from typing import Union
 
-# Coder — DeepSeek-V3 (không thinking): viết code nhanh, xuất text thô cho patch
 coder_agent: Agent[None, Union[BugExplanation, str]] = Agent(
     coder_model,
     name="Coder Agent",
