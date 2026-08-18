@@ -70,12 +70,101 @@ pip install -r requirements.txt
 ```
 
 ### 3. Thiết lập API Key
-Tạo file .env hoặc export biến môi trường:
+Tạo file `.env` hoặc export biến môi trường:
 ```bash
 export GEMINI_API_KEY="AIzaSy..."  # Hoặc OAuth Token AQ.Ab8...
+export DEEPSEEK_API_KEY="..."
 ```
 
-### 4. Chạy Hệ Thống (2 Luồng Độc Lập)
+Có thể bắt đầu nhanh bằng cách copy từ file mẫu:
+```bash
+cp .env.example .env
+```
+
+### 4. Chạy Bằng Docker
+
+#### Vì sao cần `docker-entrypoint.sh`?
+
+PyFix không chỉ chạy `main.py`, mà còn cần MCP server nội bộ để Planner/Coder gọi các tool đọc code. `docker-entrypoint.sh` tồn tại để:
+
+1. Khởi động `mcp_server.py` trong cùng container.
+2. Chờ MCP server sẵn sàng trên `PYFIX_MCP_SERVER_HOST:PYFIX_MCP_SERVER_PORT`.
+3. Chỉ sau đó mới gọi `main.py`, tránh race condition khi agent gọi tool quá sớm.
+4. Hỗ trợ nhiều mode chạy như `main`, `server`, `bash`.
+
+#### Build image
+
+```bash
+docker build -t pyfix-agents .
+```
+
+#### Chạy CLI agent trong container
+
+Ví dụ repo lỗi trên host nằm ở `/absolute/path/to/buggy-repo`, file symptom nằm ở `/absolute/path/to/symptom.txt`:
+
+```bash
+docker run --rm \
+  -e GEMINI_API_KEY="$GEMINI_API_KEY" \
+  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
+  -v /absolute/path/to/buggy-repo:/workspace/repo \
+  -v /absolute/path/to/symptom.txt:/workspace/symptom.txt:ro \
+  pyfix-agents \
+  main \
+  --repo /workspace/repo \
+  --symptom-file /workspace/symptom.txt \
+  --non-interactive
+```
+
+Nếu muốn ghi report JSON ra host:
+
+```bash
+docker run --rm \
+  -e GEMINI_API_KEY="$GEMINI_API_KEY" \
+  -e DEEPSEEK_API_KEY="$DEEPSEEK_API_KEY" \
+  -v /absolute/path/to/buggy-repo:/workspace/repo \
+  -v /absolute/path/to/symptom.txt:/workspace/symptom.txt:ro \
+  -v /absolute/path/to/output:/workspace/output \
+  pyfix-agents \
+  main \
+  --repo /workspace/repo \
+  --symptom-file /workspace/symptom.txt \
+  --report /workspace/output/report.json \
+  --non-interactive
+```
+
+#### Chạy riêng MCP server trong container
+
+```bash
+docker run --rm -p 8000:8000 pyfix-agents server
+```
+
+#### Mở shell để debug container
+
+```bash
+docker run --rm -it pyfix-agents bash
+```
+
+### 5. Chạy Hệ Thống Cục Bộ
+
+#### Chạy non-interactive bằng CLI
+
+```bash
+python main.py \
+  --repo /absolute/path/to/buggy-repo \
+  --symptom-file /absolute/path/to/symptom.txt \
+  --non-interactive
+```
+
+Hoặc truyền symptom trực tiếp:
+
+```bash
+python main.py \
+  --repo /absolute/path/to/buggy-repo \
+  --symptom-text "dán traceback hoặc mô tả lỗi ở đây" \
+  --non-interactive
+```
+
+#### Chạy interactive với MCP server tách riêng
 
 Bước 1: Khởi chạy MCP Server (Terminal 1)
 ```bash
@@ -83,9 +172,9 @@ python mcp_server.py
 ```
 Server MCP khởi chạy tại: http://localhost:8000/mcp
 
-Bước 2: Khởi chạy MCP Client Graph (Terminal 2)
+Bước 2: Khởi chạy CLI agent (Terminal 2)
 ```bash
-python mcp_client.py
+python main.py
 ```
 
 ---

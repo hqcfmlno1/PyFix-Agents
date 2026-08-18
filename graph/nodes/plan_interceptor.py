@@ -48,6 +48,12 @@ class PlanInterceptorNode(BaseNode[BugFixState]):
         print(f"  {CYAN}3. quit{RESET} (hoặc {CYAN}exit{RESET})           → Chỉ xem plan, không chỉnh sửa file")
         print(f"{'─'*60}")
 
+        if ctx.state.non_interactive:
+            print(f"  {GREEN}✓ Chế độ non-interactive: tự động chấp nhận plan.{RESET}\n")
+            ctx.state.plan_approved = True
+            ctx.state.want_apply = True
+            return ExecutionNode()
+
         while True:
             cmd = input(f"\n{BOLD}Nhập lựa chọn (proceed / replan <lý do> / quit):{RESET} ").strip()
             cmd_lower = cmd.lower()

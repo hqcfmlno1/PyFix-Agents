@@ -149,10 +149,43 @@ def parse_delimiter_blocks(patch_text: str) -> list[tuple[str, str]]:
     return matches  # [(search1, replace1), (search2, replace2), ...]
 
 
+def _try_fuzzy_replace(content: str, search: str, replace: str) -> tuple[bool, str, str]:
+    content_lines = content.splitlines()
+    search_lines = search.splitlines()
+    if not content_lines or not search_lines or len(search_lines) > len(content_lines):
+        return False, content, ""
+
+    normalized_search = "\n".join(line.strip() for line in search_lines)
+    candidates: list[tuple[float, int]] = []
+    window_size = len(search_lines)
+
+    for idx in range(len(content_lines) - window_size + 1):
+        window = content_lines[idx : idx + window_size]
+        normalized_window = "\n".join(line.strip() for line in window)
+        ratio = difflib.SequenceMatcher(None, normalized_search, normalized_window).ratio()
+        if ratio >= 0.94:
+            candidates.append((ratio, idx))
+
+    if not candidates:
+        return False, content, ""
+
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.02:
+        return False, content, ""
+
+    best_ratio, best_idx = candidates[0]
+    replace_lines = replace.splitlines()
+    new_lines = content_lines[:best_idx] + replace_lines + content_lines[best_idx + window_size :]
+    new_content = "\n".join(new_lines)
+    if content.endswith("\n"):
+        new_content += "\n"
+    return True, new_content, f"fuzzy_match_ratio={best_ratio:.3f}"
+
+
 def apply_delimiter_patch(file_content: str, patch_text: str) -> tuple[bool, str, List[str]]:
     """
     Áp dụng tuần tự tất cả delimiter blocks vào nội dung file.
-    Dùng str.replace() thuần túy — không cần exact JSON escaping.
+    Ưu tiên exact match; nếu thất bại, thử fuzzy line-based replace để chịu được sai khác nhỏ.
 
     Returns:
         (True, final_content, [])         nếu thành công
@@ -167,19 +200,27 @@ def apply_delimiter_patch(file_content: str, patch_text: str) -> tuple[bool, str
 
     for i, (search, replace) in enumerate(blocks, start=1):
         occurrences = current.count(search)
+        if occurrences == 1:
+            current = current.replace(search, replace, 1)
+            continue
+
+        fuzzy_ok, fuzzy_content, fuzzy_note = _try_fuzzy_replace(current, search, replace)
+        if fuzzy_ok:
+            current = fuzzy_content
+            continue
+
         if occurrences == 0:
             errors.append(
                 f"Block #{i}: NOT_FOUND — search_block không khớp với nội dung file.\n"
                 f"  search_block gửi lên:\n{search!r}"
             )
             return False, current, errors
-        if occurrences > 1:
-            errors.append(
-                f"Block #{i}: AMBIGUOUS — search_block xuất hiện {occurrences} lần. "
-                f"Cần thêm context để xác định duy nhất vị trí cần sửa."
-            )
-            return False, current, errors
-        current = current.replace(search, replace, 1)
+
+        errors.append(
+            f"Block #{i}: AMBIGUOUS — search_block xuất hiện {occurrences} lần. "
+            f"Cần thêm context để xác định duy nhất vị trí cần sửa."
+        )
+        return False, current, errors
 
     return True, current, []
 

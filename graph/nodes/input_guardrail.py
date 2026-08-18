@@ -1,7 +1,5 @@
 """
 InputGateGuardrailNode — Kiểm tra thông tin đầu vào và phân loại độ phức tạp lỗi.
-- Nếu SIMPLE (1 file): Chuyển thẳng sang ExecutionNode (Coder Agent không thinking).
-- Nếu COMPLEX (nhiều file / user yêu cầu xem plan): Chuyển sang PlanningNode (Thinking).
 """
 
 from __future__ import annotations
@@ -19,22 +17,39 @@ from graph.models import BugComplexity, BugFixState
 if TYPE_CHECKING:
     from graph.nodes.execution import ExecutionNode
     from graph.nodes.need_more_info import NeedMoreInfoNode
+    from graph.nodes.report import ReportNode
     from graph.nodes.reproduction_plan import ReproductionPlanNode
+
+
+def _rel_in_repo(path: str, repo_path: str) -> str:
+    normalized = os.path.normpath(path)
+    if os.path.isabs(normalized):
+        try:
+            return os.path.relpath(normalized, repo_path)
+        except ValueError:
+            return normalized
+    return normalized
 
 
 @dataclass
 class InputGateGuardrailNode(BaseNode[BugFixState]):
-    """
-    [Deterministic] Kiểm tra thông tin đầu vào tối thiểu, phân loại độ phức tạp,
-    và định tuyến đến đúng node xử lý tiếp theo.
-    """
+    """[Deterministic] Kiểm tra đầu vào tối thiểu, scope và độ phức tạp."""
 
     async def run(
         self, ctx: GraphRunContext[BugFixState]
-    ) -> Union[NeedMoreInfoNode, ExecutionNode, ReproductionPlanNode]:
+    ) -> Union["NeedMoreInfoNode", "ExecutionNode", "ReproductionPlanNode", "ReportNode"]:
         from graph.nodes.execution import ExecutionNode
         from graph.nodes.need_more_info import NeedMoreInfoNode
+        from graph.nodes.report import ReportNode
         from graph.nodes.reproduction_plan import ReproductionPlanNode
+
+        if not ctx.state.scope_supported:
+            reason = ctx.state.scope_rejection_reason or "Bug nằm ngoài scope runtime logic/data của PyFix."
+            ctx.state.want_apply = False
+            ctx.state.surrendered = True
+            ctx.state.final_explanation = reason
+            print_step("⛔", "Guardrail", f"{YELLOW}{reason}{RESET}")
+            return ReportNode()
 
         missing: List[str] = []
 
@@ -42,9 +57,9 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
             py_files = []
             for root, dirs, files in os.walk(ctx.state.repo_path):
                 dirs[:] = [d for d in dirs if d not in {".git", "__pycache__", ".venv", "venv", "node_modules"}]
-                for f in files:
-                    if f.endswith(".py"):
-                        full_f = os.path.join(root, f)
+                for filename in files:
+                    if filename.endswith(".py"):
+                        full_f = os.path.join(root, filename)
                         rel_f = os.path.relpath(full_f, ctx.state.repo_path)
                         py_files.append(rel_f)
             if len(py_files) == 1:
@@ -62,8 +77,14 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
                 print(f"   • {field}")
             return NeedMoreInfoNode()
 
-        # ── Phân loại độ phức tạp (Deterministic Heuristic) ──────────────────
-        files_in_stack = {frame.file_path for frame in ctx.state.stack_trace if frame.file_path}
+        if ctx.state.scope_confidence == "uncertain":
+            print_step("⚠", "Soft Scope Gate", "Input nằm trong vùng chưa chắc chắn; vẫn tiếp tục với hướng sửa thận trọng.")
+
+        files_in_stack = {
+            _rel_in_repo(frame.file_path, ctx.state.repo_path)
+            for frame in ctx.state.stack_trace
+            if frame.file_path
+        }
 
         if ctx.state.want_plan:
             ctx.state.complexity = BugComplexity.COMPLEX
@@ -72,10 +93,9 @@ class InputGateGuardrailNode(BaseNode[BugFixState]):
         else:
             ctx.state.complexity = BugComplexity.SIMPLE
 
-        # ── Định tuyến dựa trên độ phức tạp ─────────────────────────────────
         if ctx.state.complexity == BugComplexity.SIMPLE:
             print_step("⚡", "Guardrail", f"{GREEN}Lỗi ĐƠN GIẢN (1 file){RESET} — Chuyển thẳng sang {BOLD}Coder Agent{RESET} (không thinking)...")
             return ExecutionNode()
-        else:
-            print_step("🧪", "Guardrail", f"{YELLOW}Lỗi PHỨC TẠP (nhiều file / yêu cầu plan){RESET} — Chuyển sang {BOLD}Reproduction Plan{RESET} để viết kịch bản tái hiện...")
-            return ReproductionPlanNode()
+
+        print_step("🧪", "Guardrail", f"{YELLOW}Lỗi PHỨC TẠP (nhiều file / yêu cầu plan){RESET} — Chuyển sang {BOLD}Reproduction Plan{RESET} để viết kịch bản tái hiện...")
+        return ReproductionPlanNode()

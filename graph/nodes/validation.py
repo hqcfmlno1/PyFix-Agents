@@ -18,6 +18,11 @@ from graph.config import CYAN, GREEN, RED, RESET, YELLOW
 from graph.helpers import print_step, resolve_target_path
 from graph.models import BugComplexity, BugFixState
 
+
+def _project_python(repo_path: str) -> str:
+    candidate = os.path.join(repo_path, ".venv", "bin", "python")
+    return candidate if os.path.exists(candidate) else sys.executable
+
 if TYPE_CHECKING:
     from graph.nodes.planning import PlanningNode
     from graph.nodes.report import ReportNode
@@ -50,7 +55,7 @@ class ValidationNode(BaseNode[BugFixState]):
             if not os.path.exists(target_path):
                 continue
 
-            proc = subprocess.run([sys.executable, "-m", "py_compile", target_path], capture_output=True, text=True)
+            proc = subprocess.run([_project_python(ctx.state.repo_path), "-m", "py_compile", target_path], capture_output=True, text=True)
             if proc.returncode != 0:
                 syntax_err = (proc.stderr or proc.stdout).strip()
                 print_step("❌", "Validation", f"{RED}Lỗi cú pháp tại {ffix.target_file}:{RESET}\n  {syntax_err}")
@@ -58,13 +63,32 @@ class ValidationNode(BaseNode[BugFixState]):
 
         print_step("✅", "Validation", f"{GREEN}Cú pháp mã nguồn hợp lệ!{RESET}")
 
+        baseline_test = os.path.join(ctx.state.repo_path, "scenarios", "test_baseline.py")
+        if os.path.exists(baseline_test):
+            print_step("🔍", "Validation Node", "Kiểm tra regression bằng baseline pytest...")
+            env = os.environ.copy()
+            env["PYTHONPATH"] = ctx.state.repo_path
+            proc = subprocess.run(
+                [_project_python(ctx.state.repo_path), "-m", "pytest", baseline_test, "-q"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                cwd=ctx.state.repo_path,
+                env=env,
+            )
+            if proc.returncode != 0:
+                baseline_err = (proc.stderr or proc.stdout).strip()
+                print_step("❌", "Validation", f"{RED}Baseline regression test thất bại:{RESET}\n  {baseline_err}")
+                return self._handle_failure(ctx, f"Baseline pytest thất bại: {baseline_err}")
+            print_step("✅", "Validation", f"{GREEN}Baseline pytest đã pass.{RESET}")
+
         print_step("🔍", "Validation Node", "2/2. Kiểm tra bằng kịch bản tái hiện (nếu có)...")
         if getattr(ctx.state, 'repro_confirmed', False) and ctx.state.repro_script_path and os.path.exists(ctx.state.repro_script_path):
             env = os.environ.copy()
             env["PYTHONPATH"] = ctx.state.repo_path
             try:
                 proc = subprocess.run(
-                    [sys.executable, ctx.state.repro_script_path],
+                    [_project_python(ctx.state.repo_path), ctx.state.repro_script_path],
                     capture_output=True,
                     text=True,
                     timeout=10,
@@ -99,6 +123,11 @@ class ValidationNode(BaseNode[BugFixState]):
             )
         )
 
+        ctx.state.validation_passed = True
+
+        if ctx.state.non_interactive:
+            return ReportNode()
+
         # Chuyển quyền quyết định thành công/thất bại cho lập trình viên
         return InputAnalyzerNode()
 
@@ -112,6 +141,12 @@ class ValidationNode(BaseNode[BugFixState]):
         ctx.state.validation_passed = False
         ctx.state.validation_errors.append(error_msg)
         ctx.state.action_history.append(f"Lần thử Replan {ctx.state.replan_count + 1}: Bản patch thất bại khi kiểm thử runtime. Chi tiết lỗi: {error_msg}")
+
+        if ctx.state.non_interactive and (not ctx.state.final_fixes or "Không có file sửa đổi" in error_msg):
+            print(f"\n  {RED}☠️ Dừng sớm do không tạo được bản vá hợp lệ trong non-interactive mode.{RESET}")
+            ctx.state.surrendered = True
+            ctx.state.final_explanation = error_msg
+            return ReportNode()
 
         if ctx.state.replan_count < ctx.state.max_replan_limit:
             print(f"\n  {RED}❌ Lỗi gốc chưa được khắc phục triệt để.{RESET}")

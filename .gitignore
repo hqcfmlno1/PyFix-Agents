@@ -1,3 +1,4 @@
 .env
 __pycache__/
 pyfix_metrics.json
+logs/
