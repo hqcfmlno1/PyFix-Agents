@@ -48,7 +48,7 @@ ANALYZER_MODEL_NAME = "gemma-4-31b-it"
 analyzer_model = GoogleModel(ANALYZER_MODEL_NAME, provider=google_provider)
 
 # Planner: GPT-OSS-120B — native ThinkingPart, reasoning mạnh, tool calling tốt
-PLANNER_MODEL_NAME = "openai/gpt-oss-120b"
+PLANNER_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Pro"
 planner_model = OpenAIChatModel(
     PLANNER_MODEL_NAME,
     provider=deepseek_provider,
@@ -56,7 +56,7 @@ planner_model = OpenAIChatModel(
 )
 
 # Repro Agent: GPT-OSS-120B — reasoning mạnh, viết repro chính xác
-REPRO_MODEL_NAME = "openai/gpt-oss-120b"
+REPRO_MODEL_NAME = "deepseek-ai/DeepSeek-V4-Flash-0731"
 repro_model = OpenAIChatModel(
     REPRO_MODEL_NAME,
     provider=deepseek_provider,
@@ -72,8 +72,9 @@ model = analyzer_model
 MODEL_NAME = ANALYZER_MODEL_NAME
 
 # ── MCP Server ───────────────────────────────────────────────────────────────
-MCP_SERVER_PORT = 8000
-MCP_SERVER_URL = f"http://localhost:{MCP_SERVER_PORT}/mcp"
+MCP_SERVER_PORT = int(os.getenv("PYFIX_MCP_SERVER_PORT", "8000"))
+MCP_SERVER_HOST = os.getenv("PYFIX_MCP_SERVER_HOST", "127.0.0.1")
+MCP_SERVER_URL = f"http://{MCP_SERVER_HOST}:{MCP_SERVER_PORT}/mcp"
 
 # ── Retry / Replan limits ────────────────────────────────────────────────────
 MAX_RETRY = 5       # Số lần thử lại Execution khi validation thất bại

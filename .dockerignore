@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+logs/
+pyfix_metrics.json
+state-diagram/
