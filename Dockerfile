@@ -17,7 +17,7 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
 COPY . .
-RUN chmod +x /app/docker-entrypoint.sh /app/bug_arena_adapter.sh
+RUN chmod +x /app/docker-entrypoint.sh
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["main"]
