@@ -14,7 +14,7 @@ Hệ thống multi-agent hỗ trợ phân tích và sửa lỗi runtime Python, 
 - [Chạy cục bộ](#chạy-cục-bộ)
 - [Chạy bằng Docker](#chạy-bằng-docker)
 - [Kiểm chứng và đầu ra](#kiểm-chứng-và-đầu-ra)
-- [Tích hợp Bug Arena](#tích-hợp-bug-arena)
+- [Tích hợp harness](#tích-hợp-harness)
 - [Cấu trúc mã nguồn](#cấu-trúc-mã-nguồn)
 - [Quy ước commit](#quy-ước-commit)
 
@@ -288,18 +288,19 @@ Nếu thiếu baseline hoặc Repro hợp lệ, đạt kiểm chứng chủ yế
 
 `status` trong metrics có thể là `success`, `surrendered`, `incomplete`. Báo cáo `--report` chưa chứa `status`; `reproduced` có thể là `true` chỉ vì đã có input, nên không thay thế cho xác nhận script tái hiện thành công. CLI cũng chưa ánh xạ trạng thái sửa lỗi thất bại thành exit code riêng; harness nên đối chiếu metrics, log và kiểm thử repo.
 
-## Tích hợp Bug Arena
+## Tích hợp harness
 
-[bug_arena_adapter.sh](bug_arena_adapter.sh) gọi Python trong `.venv` của PyFix và bật chế độ không tương tác. Khởi động MCP server trước khi gọi adapter.
+Harness gọi trực tiếp CLI ở chế độ không tương tác sau khi khởi động MCP server:
 
 ```bash
-ARENA_SYMPTOM_FILE=/absolute/path/to/symptom.txt \
-ARENA_REPORT=/absolute/path/to/output/agent_report.json \
-ARENA_BUG_ID=example-bug \
-bash bug_arena_adapter.sh /absolute/path/to/buggy-repo
+ARENA_BUG_ID=example-bug python main.py \
+  --repo /absolute/path/to/buggy-repo \
+  --symptom-file /absolute/path/to/symptom.txt \
+  --report /absolute/path/to/output/agent_report.json \
+  --non-interactive
 ```
 
-Adapter ưu tiên `ARENA_SYMPTOM_FILE` (mặc định `SYMPTOM.txt`); nếu file không tồn tại, dùng `ARENA_SYMPTOM`. `ARENA_REPORT` mặc định là `agent_report.json`. Đường dẫn tương đối tính từ thư mục đang gọi lệnh; `ARENA_BUG_ID` dùng để đặt tên log.
+`ARENA_BUG_ID` dùng để đặt tên log. Harness truyền symptom và đường dẫn báo cáo qua các tham số CLI, rồi đối chiếu kết quả với log, metrics và kiểm thử repo như mô tả ở trên.
 
 ## Cấu trúc mã nguồn
 
@@ -328,10 +329,6 @@ PyFix-Agents/
 │       ├── validation.py           # Cú pháp, baseline, Repro
 │       └── report.py               # Báo cáo, metrics, dọn script
 ├── mcp_server.py                  # FastMCP server đang sử dụng
-├── mcp_client_old.py              # Client cũ để tham khảo
-├── mcp_server_old.py              # Server cũ để tham khảo
-├── test_input.py                  # Script thử gọi model, không phải test suite
-├── bug_arena_adapter.sh           # Adapter cho harness
 ├── docker-entrypoint.sh           # Khởi động server và CLI
 ├── Dockerfile
 ├── requirements.txt
